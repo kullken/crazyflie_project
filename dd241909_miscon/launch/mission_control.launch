@@ -1,0 +1,5 @@
+<?xml version="1.0"?>
+
+<launch>
+    <node pkg="dd241909_miscon" type="state_machine.py" name="state_machine"/>
+</launch>
