@@ -1,5 +1,9 @@
 <?xml version="1.0"?>
 
 <launch>
-    <node pkg="dd241909_miscon" type="state_machine.py" name="state_machine"/>
+    <arg name="navgoal_topic"       default="move_base_simple/goal"/>
+
+    <node pkg="dd241909_miscon" type="state_machine_node.py" name="state_machine">
+        <param name="navgoal_topic"     value="$(arg navgoal_topic)"/>
+    </node>
 </launch>

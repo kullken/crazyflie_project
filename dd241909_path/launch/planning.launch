@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 
 <launch>
-    <arg name="world_file"/>
+    <arg name="world_name"/>
     
     <node pkg="dd241909_path" type="navgoal.py" name="navgoal"/>
 </launch>
