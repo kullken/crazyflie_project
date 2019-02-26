@@ -6,8 +6,16 @@ from abc import ABCMeta, abstractmethod, abstractproperty
 import rospy
 
 
+class BlackBoard(object):
+    def __init__(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
 class State(object):
     __metaclass__ = ABCMeta
+
+    #_shared = {}
+    board = BlackBoard()
 
     def __init__(self):
         self.transitions = {}
@@ -27,6 +35,12 @@ class State(object):
     @abstractmethod
     def execute(self):
         pass
+
+    # def __getitem__(self, key):
+    #     return self._shared[key]
+
+    # def __setitem__(self, key, value):
+    #     self._shared[key] = value
 
     def __repr__(self):
         return self.name
@@ -57,20 +71,8 @@ class StateMachine(State):
     def outcomes(self):
         return {state.outcomes for state in self.states.values()}
 
-    @property
-    def board(self):
-        return self._board
-
-    @board.setter
-    def board(self, board):
-        self._board = board
-        for state in self.states.values():
-            state.board = board
-
     def setup(self):
-        if not hasattr(self, 'board'):
-            rospy.logwarn_throttle(1.0, '{}: Setting up blackboard...'.format(self.name))
-            self.board = BlackBoard()
+        pass
 
     def execute(self):
         while not rospy.is_shutdown():
@@ -93,10 +95,4 @@ class StateMachine(State):
             self.state = state
         self.states[state.name] = state
 
-
-class BlackBoard(object):
-
-    def __init__(self, **kwargs):
-        for key, value in kwargs.items():
-            setattr(self, key, value)
 
