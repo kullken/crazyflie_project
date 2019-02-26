@@ -15,18 +15,13 @@ def create_map(map_data, coll_rad, grid_unit_size=0.2, off_ground=0.2, side_marg
 
     # Convert obstacle to point cloud with finer granularity than map representation
     points = set()
-    rospy.loginfo(rospy.get_name() + ': Parsing walls...')
     for wall in map_data['walls']:
         points.union(plane_to_points(wall['plane'], grid_unit_size, coll_rad))
-    rospy.loginfo(rospy.get_name() + ': Walls done.')
-    rospy.loginfo(rospy.get_name() + ': Parsing gates...')
     for gate in map_data['gates']:
         points.union(gate_to_points(gate, grid_unit_size, coll_rad, map_data['gate_size'], off_ground, side_margin, airspace_max.z))
-    rospy.loginfo(rospy.get_name() + ': Gates done.')
     points = {point for point in points if airspace_min <= point <= airspace_max}
 
     # Adjust gate position to middle of gate for later convenience
-    rospy.loginfo(rospy.get_name() + ': Adjusting gate position...')
     for gate in map_data['gates']:
         gate['width']  = map_data['gate_size'][0]
         gate['height'] = map_data['gate_size'][1]
@@ -133,8 +128,7 @@ class Octomap(object):
         max_depth = 0
         while grid_unit_size <= tree_size/(2**max_depth):
             max_depth += 1
-
-        rospy.loginfo(rospy.get_name() + ': Creating octree...')
+        
         self.octree = Octree(tree_center, 
                              tree_size, 
                              collision_points, 
@@ -295,11 +289,11 @@ class Vec3(object):
             raise IndexError()
 
     def __repr__(self):
-        return 'Vec3({}, {}, {})'.format(self.x, self.y, self,z)
+        return 'Vec3({}, {}, {})'.format(self.x, self.y, self.z)
 
     def __str__(self):
         # TODO: Round output
-        return 'Vec3({}, {}, {})'.format(self.x, self.y, self,z)
+        return 'Vec3({}, {}, {})'.format(self.x, self.y, self.z)
 
     def __hash__(self):
         return hash((self.x, self.y, self.z))
@@ -348,7 +342,7 @@ class Vec3(object):
         return Vec3(other.x-self.x, other.y-self.y, other.z-self.z)
 
     def __mul__(self, other):
-        return Vec3(self.x+other, self.y+other, self.z+other)
+        return Vec3(self.x*other, self.y*other, self.z*other)
     def __rmul__(self, other):
         return self.__mul__(other)
 
