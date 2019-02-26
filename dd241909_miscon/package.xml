@@ -68,6 +68,9 @@
   <exec_depend>tf</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
 
+  <depend>actionlib</depend>
+  <depend>dd241909_msgs</depend>
+
 
   <!-- The export tag contains other, unspecified, tags -->
   <export>
