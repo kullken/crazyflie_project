@@ -1,0 +1,70 @@
+#!/usr/bin/env python
+
+import heapq
+
+
+class HeapPriorityQueue(object):
+    """Priority queue based on heapq module."""
+
+    def __init__(self):
+        self._heap = []
+        self._dict = {}
+
+    def push(self, item):
+        """Push item into queue."""
+        priority = item.timeFromStart + item.heuristic
+        heapq.heappush(self._heap, (priority, item.key))
+        self._dict[item.key] = item
+
+    def pop(self):
+        """Pop smallest item from queue."""
+        key = heapq.heappop(self._heap)[1]
+        item = self._dict.pop(key)
+        return item
+
+    def contain(self, item):
+        """Return True if item is in queue, False otherwise"""
+        return item.key in self._dict
+
+    def getOldTime(self, key):
+        """Returns current time saved for given key"""
+        return self._dict[key].timeFromStart
+
+    def isEmpty(self):
+        """Return True if queue is empty, False otherwise"""
+        return len(self._heap) == 0
+
+    def size(self):
+        """Returns number of nodes in queue."""
+        return len(self._heap)
+
+    def lowestPrio(self):
+        """Get priority of first node in queue."""
+        # Queue might be empty.
+        if self.isEmpty():
+            return -1
+
+        return self._heap[0][0]
+
+    def updateQueue(self, newNode):
+        """Updates node and resort queue."""
+        # Remove old node with same key
+        oldNode = self._dict[newNode.key]
+        oldPriority = oldNode.timeFromStart + oldNode.heuristic
+        self._heap.remove((oldPriority, oldNode.key))
+        heapq.heapify(self._heap)
+        # Then push new node as usual
+        self.push(newNode)
+
+    def removeEverythingBeforeWpIndex(self, inputWpIndex):
+        """Remove all entries with wpIndex < inputWpIndex."""
+        newHeap = []
+        for entry in self._heap:
+            key = entry[1]
+            if key[-1] >= inputWpIndex:
+                newHeap.append(entry)
+            else:
+                self._dict.pop(key)
+
+        self._heap = newHeap
+        heapq.heapify(self._heap)
