@@ -47,8 +47,7 @@ class HeapPriorityQueue(object):
 
     def push(self, item):
         """Push item into queue."""
-        priority = item.timeFromStart + item.heuristic
-        heapq.heappush(self._heap, (priority, item.key))
+        heapq.heappush(self._heap, (item.prio, item.key))
         self._dict[item.key] = item
 
     def pop(self):
@@ -57,15 +56,15 @@ class HeapPriorityQueue(object):
         item = self._dict.pop(key)
         return item
 
-    def contain(self, item):
+    def __contains__(self, item):
         """Return True if item is in queue, False otherwise"""
         return item.key in self._dict
 
-    def getOldTime(self, key):
+    def get_item(self, key):
         """Returns current time saved for given key"""
-        return self._dict[key].timeFromStart
+        return self._dict[key]
 
-    def isEmpty(self):
+    def is_empty(self):
         """Return True if queue is empty, False otherwise"""
         return len(self._heap) == 0
 
@@ -73,33 +72,32 @@ class HeapPriorityQueue(object):
         """Returns number of nodes in queue."""
         return len(self._heap)
 
-    def lowestPrio(self):
+    def lowest_prio(self):
         """Get priority of first node in queue."""
         # Queue might be empty.
-        if self.isEmpty():
+        if self.is_empty():
             return -1
+        else:
+            return self._heap[0][0]
 
-        return self._heap[0][0]
-
-    def updateQueue(self, newNode):
+    def update_queue(self, newnode):
         """Updates node and resort queue."""
         # Remove old node with same key
-        oldNode = self._dict[newNode.key]
-        oldPriority = oldNode.timeFromStart + oldNode.heuristic
-        self._heap.remove((oldPriority, oldNode.key))
+        oldnode = self._dict[newnode.key]
+        self._heap.remove((oldnode.prio, oldnode.key))
         heapq.heapify(self._heap)
         # Then push new node as usual
-        self.push(newNode)
+        self.push(newnode)
 
-    def removeEverythingBeforeWpIndex(self, inputWpIndex):
-        """Remove all entries with wpIndex < inputWpIndex."""
-        newHeap = []
+    def remove_everything_before_wp_index(self, inputWpIndex):
+        """Remove all entries with wpi < input_wpi."""
+        new_heap = []
         for entry in self._heap:
             key = entry[1]
-            if key[-1] >= inputWpIndex:
-                newHeap.append(entry)
+            if key[-1] >= input_wpi:
+                new_heap.append(entry)
             else:
                 self._dict.pop(key)
 
-        self._heap = newHeap
+        self._heap = new_heap
         heapq.heapify(self._heap)
