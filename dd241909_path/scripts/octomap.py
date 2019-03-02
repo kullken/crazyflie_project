@@ -7,7 +7,7 @@ import numpy as np
 
 import rospy
 
-def create_map(map_data, coll_rad, grid_unit_size=0.2, off_ground=0.2, side_margin=0.2):
+def create_map(map_data, coll_rad, grid_unit_size=0.2, off_ground=0.2, side_margin=0.1):
     """Create map object dictionary map_dict."""
 
     airspace_min = Vec3(*map_data['airspace']['min'])
@@ -16,10 +16,10 @@ def create_map(map_data, coll_rad, grid_unit_size=0.2, off_ground=0.2, side_marg
     # Convert obstacle to point cloud with finer granularity than map representation
     points = set()
     for wall in map_data['walls']:
-        points.union(plane_to_points(wall['plane'], grid_unit_size, coll_rad))
+        points = points.union(plane_to_points(wall['plane'], grid_unit_size, coll_rad))
     for gate in map_data['gates']:
-        points.union(gate_to_points(gate, grid_unit_size, coll_rad, map_data['gate_size'], off_ground, side_margin, airspace_max.z))
-    points = {point for point in points if airspace_min <= point <= airspace_max}
+        points = points.union(gate_to_points(gate, grid_unit_size, coll_rad, map_data['gate_size'], off_ground, side_margin, airspace_max.z))
+    points = {point for point in points if (airspace_min <= point <= airspace_max)}
 
     # Adjust gate position to middle of gate for later convenience
     for gate in map_data['gates']:
@@ -29,7 +29,7 @@ def create_map(map_data, coll_rad, grid_unit_size=0.2, off_ground=0.2, side_marg
                                 gate['position'][1], 
                                 off_ground + gate['height']/2)
 
-    return Octomap(points, map_data['gates'], map_data['markers'], map_data['airspace'], grid_unit_size)
+    return Octomap(points, map_data['gates'], map_data['markers'], map_data['airspace'], grid_unit_size), points
 
 def gate_to_points(gate, cube_side, coll_rad, gate_size, off_ground, side_margin, z_max):
     gate_width  = gate_size[0]
@@ -138,6 +138,9 @@ class Octomap(object):
 
         return
 
+    def query(self, points):
+        return self.octree.query(points)
+        
 
 class Octree(object):
     """
@@ -166,11 +169,12 @@ class Octree(object):
         self.isleaf     = False
         self.isfree     = False
         self.isoccupied = False
+        self.subtrees = []
 
         if bound_min is None:
-            bound_min = Vec3(float('Inf'), float('Inf'), float('Inf'))
+            bound_min = -Vec3(float('Inf'), float('Inf'), float('Inf'))
         if bound_max is None:
-            bound_max = -Vec3(float('Inf'), float('Inf'), float('Inf'))
+            bound_max = Vec3(float('Inf'), float('Inf'), float('Inf'))
 
         tree_max = center + Vec3(size/2, size/2, size/2)
         tree_min = center - Vec3(size/2, size/2, size/2)
@@ -181,16 +185,15 @@ class Octree(object):
         elif max_depth == 0:
             self.isleaf = True
             self.isoccupied = True
-        elif tree_max <= bound_min:
+        elif tree_max.x <= bound_min.x or tree_max.y <= bound_min.y or tree_max.z <= bound_min.z:
             self.isleaf = True
             self.isoccupied = True
-        elif tree_min >= bound_max:
+        elif tree_min.x >= bound_max.x or tree_min.y >= bound_max.y or tree_min.z >= bound_max.z:
             self.isleaf = True
             self.isoccupied = True
         else:
-            self.subtrees = []
             centers = self.find_subtree_centers(self.center, self.size)
-            points_per_octant = self.split_by_octant(points, centers)
+            points_per_octant = self.split_by_octant(points, self.center)
             diagonal = Vec3(size/4, size/4, size/4)
 
             for subcenter, subpoints in zip(centers, points_per_octant):
@@ -203,6 +206,8 @@ class Octree(object):
 
                 self.subtrees.append(Octree(subcenter, size/2, subpoints, 
                                             max_depth-1, sub_bound_min, sub_bound_max))
+
+        assert not (self.isfree and self.isoccupied)
         
         return
 
@@ -231,16 +236,19 @@ class Octree(object):
         return points_by_octant
 
     def find_subtree_centers(self, center, size):
-        centers = []
-        for z in (size/4, -size/4):
-            for y in (size/4, -size/4):
-                for x in (size/4, -size/4):
-                    centers.append(center + Vec3(x, y, z))
-            
-        return centers
+        directions = [Vec3( 1,  1,  1),
+                      Vec3(-1,  1,  1),
+                      Vec3(-1, -1,  1),
+                      Vec3( 1, -1,  1),
+                      Vec3( 1,  1, -1),
+                      Vec3(-1,  1, -1),
+                      Vec3(-1, -1, -1),
+                      Vec3( 1, -1, -1)]
+
+        return [center + direct*size/4 for direct in directions]
 
 
-    def query(points):
+    def query(self, points):
         """
         Input: 
             points - list of points to query
@@ -248,10 +256,11 @@ class Octree(object):
         Output:
             result - bool value of any point in points is colliding
         """
+        rospy.logwarn('points: {}'.format(points))
         if self.isleaf:
             return self.isoccupied
         else:
-            points_per_octant = self.split_by_octant(points, centers)
+            points_per_octant = self.split_by_octant(points, self.center)
             for octant, point_subset in zip(range(8), points_per_octant):
                 if self.subtrees[octant].query(point_subset):
                     return True
@@ -289,11 +298,9 @@ class Vec3(object):
             raise IndexError()
 
     def __repr__(self):
-        return 'Vec3({}, {}, {})'.format(self.x, self.y, self.z)
-
+        return 'Vec3({}, {}, {})'.format(round(self.x, 4), round(self.y, 4), round(self.z, 4))
     def __str__(self):
-        # TODO: Round output
-        return 'Vec3({}, {}, {})'.format(self.x, self.y, self.z)
+        return 'Vec3({}, {}, {})'.format(round(self.x, 4), round(self.y, 4), round(self.z, 4))
 
     def __hash__(self):
         return hash((self.x, self.y, self.z))
