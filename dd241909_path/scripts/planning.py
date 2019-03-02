@@ -3,6 +3,41 @@
 import heapq
 
 
+class Node(object):
+
+    def __init__(self, xi, yi, wpi):
+        self._xi = xi
+        self._yi = yi
+        self._wpi = wpi
+        # self.parent = parent
+        # self.cost = cost
+        # self.heuristic = heuristic
+
+    def __hash__(self):
+        return hash(self.key)
+    def __eq__(self, other):
+        return self.key == other.key
+    def __ne__(self, other):
+        return self.key != other.key
+
+    @property
+    def key(self):
+        return (self.xi, self.yi, self.wpi)
+    @property
+    def xi(self):
+        return self._xi
+    @property
+    def yi(self):
+        return self._yi
+    @property
+    def wpi(self):
+        return self._wpi
+    
+    @property
+    def prio(self):
+        return self.cost + self.heuristic
+
+
 class HeapPriorityQueue(object):
     """Priority queue based on heapq module."""
 
