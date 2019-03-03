@@ -4,6 +4,7 @@ import math
 import rospy
 import tf2_ros
 import tf2_geometry_msgs
+from rospy.exceptions import ROSInterruptException
 from tf.transformations import euler_from_quaternion
 from geometry_msgs.msg import PoseStamped
 from crazyflie_driver.msg import Position
@@ -17,14 +18,14 @@ def goal_callback(msg):
     rospy.loginfo('New goal set:\n%s', goal)
 
 def publish_cmd(goal):
-    #goal.header.stamp = rospy.Time.now()
+    goal.header.stamp = rospy.Time.now()
     goal_frame_id = goal.header.frame_id
     odom_frame_id = 'cf1/odom'
-    if not tf_buf.can_transform(goal_frame_id, odom_frame_id, goal.header.stamp):
-        rospy.logwarn_throttle(5.0, 'cannot transform goal from {} to {}/odom'.format(goal_frame_id, odom_frame_id))
+    if not tf_buff.can_transform(goal_frame_id, odom_frame_id, goal.header.stamp):
+        rospy.logwarn_throttle(5.0, 'cannot transform goal from {} to {}'.format(goal_frame_id, odom_frame_id))
         return
 
-    goal_odom = tf_buf.transform(goal, odom_frame_id)
+    goal_odom = tf_buff.transform(goal, odom_frame_id)
 
     roll, pitch, yaw = euler_from_quaternion((goal_odom.pose.orientation.x,
                                               goal_odom.pose.orientation.y,
@@ -43,18 +44,24 @@ def publish_cmd(goal):
 
     pub_cmd.publish(cmd)
 
-rospy.init_node('navgoal')
-sub_goal = rospy.Subscriber('/cf1/move_base_simple/goal', PoseStamped, goal_callback)
+rospy.init_node('navgoal', log_level=rospy.WARN)
+tfprefix        = rospy.get_param(rospy.get_name() + '/tfprefix')
+navgoal_topic   = rospy.get_param(rospy.get_name() + '/navgoal_topic')
+
+sub_goal = rospy.Subscriber(navgoal_topic, PoseStamped, goal_callback)
 pub_cmd  = rospy.Publisher('/cf1/cmd_position', Position, queue_size=2)
-tf_buf   = tf2_ros.Buffer()
-tf_lstn  = tf2_ros.TransformListener(tf_buf)
+tf_buff  = tf2_ros.Buffer()
+tf_lstn  = tf2_ros.TransformListener(tf_buff)
 
 def main():
-    rate = rospy.Rate(10)  # Hz
+    rate = rospy.Rate(20)  # Hz
     while not rospy.is_shutdown():
         if goal:
             publish_cmd(goal)
         rate.sleep()
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except ROSInterruptException:
+        pass

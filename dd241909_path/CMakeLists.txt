@@ -10,10 +10,13 @@ project(dd241909_path)
 find_package(catkin REQUIRED COMPONENTS
   crazyflie_driver
   geometry_msgs
+  nav_msgs
   rospy
   std_msgs
   tf
   tf2_ros
+  actionlib
+  actionlib_msgs
 )
 
 ## System dependencies are found with CMake's conventions
@@ -64,16 +67,17 @@ find_package(catkin REQUIRED COMPONENTS
 # )
 
 ## Generate actions in the 'action' folder
-# add_action_files(
+# add_action_files(DIRECTORY action 
 #   FILES
-#   Action1.action
-#   Action2.action
+#   PlanGlobalPath.action
 # )
 
 ## Generate added messages and services with any dependencies listed here
 # generate_messages(
 #   DEPENDENCIES
-#   geometry_msgs#   std_msgs
+#   geometry_msgs
+#   nav_msgs
+#   actionlib_msgs
 # )
 
 ################################################

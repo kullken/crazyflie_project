@@ -1,152 +1,98 @@
 #!/usr/bin/env python
 
-import math
-from collections import namedtuple
-State = namedtuple('State', ['name', 'setup', 'action'])
+import random
+from abc import ABCMeta, abstractmethod, abstractproperty
 
 import rospy
-import tf2_ros
-import tf2_geometry_msgs
-from rospy.exceptions import ROSInterruptException
-from tf.transformations import quaternion_from_euler
-from geometry_msgs.msg import PoseStamped, Point
 
-def point_dist(p1, p2):
-    return math.sqrt((p1.x-p2.x)**2 + (p1.y-p2.y)**2 + (p1.z-p2.z)**2)
 
-class StateMachine(object):
+class BlackBoard(object):
+    def __init__(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
-    tol = 0.1
+class State(object):
+    __metaclass__ = ABCMeta
 
-    done_state      = 0
-    setup_state     = 1000
-    marker0_state   = 1011
-    marker1_state   = 1012
-    marker2_state   = 1013
-    stopsign_state  = 1014
+    #_shared = {}
+    board = BlackBoard()
 
     def __init__(self):
+        self.transitions = {}
 
-        rospy.init_node('state_machine')
-        self.rate = rospy.Rate(10)  # Hz
-        self.goal_pub = rospy.Publisher('/cf1/move_base_simple/goal', PoseStamped, queue_size=5)
+    @abstractproperty
+    def name(self):
+        pass
 
-        self.tf_buff = tf2_ros.Buffer()
-        self.tf_list = tf2_ros.TransformListener(self.tf_buff)
+    @abstractproperty
+    def outcomes(self):
+        pass
+    
+    @abstractmethod
+    def setup(self):
+        pass
+    
+    @abstractmethod
+    def execute(self):
+        pass
 
-        self.state = self.setup_state
+    # def __getitem__(self, key):
+    #     return self._shared[key]
 
-        # marker0 observation pose
-        pose = PoseStamped()
-        pose.header.frame_id = 'map'
-        pose.pose.position = Point(x=0, y=0, z=0.5)
-        (pose.pose.orientation.x,
-         pose.pose.orientation.y,
-         pose.pose.orientation.z,
-         pose.pose.orientation.w) = quaternion_from_euler(0, 0, 0)
-        self.marker0_obs_pose = pose
+    # def __setitem__(self, key, value):
+    #     self._shared[key] = value
 
-        # marker1 observation pose
-        pose = PoseStamped()
-        pose.header.frame_id = 'map'
-        pose.pose.position = Point(x=4.3, y=0, z=0.5)
-        (pose.pose.orientation.x,
-         pose.pose.orientation.y,
-         pose.pose.orientation.z,
-         pose.pose.orientation.w) = quaternion_from_euler(0, 0, 0)
-        self.marker1_obs_pose = pose
+    def __repr__(self):
+        return self.name
 
-        # marker2 observation pose
-        pose = PoseStamped()
-        pose.header.frame_id = 'map'
-        pose.pose.position = Point(6, 0, 0.5)
-        (pose.pose.orientation.x,
-         pose.pose.orientation.y,
-         pose.pose.orientation.z,
-         pose.pose.orientation.w) = quaternion_from_euler(0, 0, 0)
-        self.marker2_obs_pose = pose
+    def __eq__(self, other):
+        return self.name == other.name
 
-        # stopsign observation pose
-        pose = PoseStamped()
-        pose.header.frame_id = 'map'
-        pose.pose.position = Point(8, 0, 0.5)
-        (pose.pose.orientation.x,
-         pose.pose.orientation.y,
-         pose.pose.orientation.z,
-         pose.pose.orientation.w) = quaternion_from_euler(0, 0, 0)
-        self.stopsign_obs_pose = pose
+    def __ne__(self, other):
+        return not self == other
+
+
+
+class StateMachine(State):
+
+    name = 'DUMMY_NAME'
+
+    def __init__(self, name=None):
+        super(StateMachine, self).__init__()
+
+        if name:
+            self.name = name
+        else:
+            self.name = 'STATE_MACHINE_{}'.format(random.randint(10000, 99999))
+
+        self.states = {}
 
     @property
-    def state(self):
-        return self._state
+    def outcomes(self):
+        return {state.outcomes for state in self.states.values()}
 
-    @state.setter
-    def state(self, new_state):
-        rospy.logwarn('State machine changing state to: ' + str(new_state))
-        self._state = new_state
-
-    def check_states(self):
-
-        while not rospy.is_shutdown():
-
-            if self.state == self.setup_state:
-                rospy.sleep(0.5)
-                self.state = self.marker0_state
-
-            elif self.state == self.marker0_state:
-                robot_tf = self.tf_buff.lookup_transform('map', 'cf1/base_link', rospy.Time(0))
-                dist = point_dist(self.marker0_obs_pose.pose.position,
-                                  robot_tf.transform.translation)
-                if dist < self.tol:
-                    self.state = self.marker1_state
-                else:
-                    # Actual action in this state
-                    self.marker0_obs_pose.header.stamp = rospy.Time.now()
-                    self.goal_pub.publish(self.marker0_obs_pose)
-
-            elif self.state == self.marker1_state:
-                robot_tf = self.tf_buff.lookup_transform('map', 'cf1/base_link', rospy.Time(0))
-                dist = point_dist(self.marker1_obs_pose.pose.position,
-                                  robot_tf.transform.translation)
-                if dist < self.tol:
-                    self.state = self.marker2_state
-                else:
-                    # Actual action in this state
-                    self.marker1_obs_pose.header.stamp = rospy.Time.now()
-                    self.goal_pub.publish(self.marker1_obs_pose)
-
-            elif self.state == self.marker2_state:
-                robot_tf = self.tf_buff.lookup_transform('map', 'cf1/base_link', rospy.Time(0))
-                dist = point_dist(self.marker2_obs_pose.pose.position,
-                                  robot_tf.transform.translation)
-                if dist < self.tol:
-                    #self.state = self.stopsign_state
-                    pass
-                else:
-                    # Actual action in this state
-                    self.marker2_obs_pose.header.stamp = rospy.Time.now()
-                    self.goal_pub.publish(self.marker2_obs_pose)
-
-            elif self.state == self.stopsign_state:
-                robot_tf = self.tf_buff.lookup_transform('map', 'cf1/base_link', rospy.Time(0))
-                dist = point_dist(self.marker0_obs_pose.pose.position,
-                                  robot_tf.transform.translation)
-                if dist < self.tol:
-                    self.state = self.done_state
-                else:
-                    # Actual action in this state
-                    self.stopsign_obs_pose.header.stamp = rospy.Time.now()
-                    self.goal_pub.publish(self.stopsign_obs_pose)
-
-            # Here for completness sake
-            elif self.state == self.done_state:
-                pass
-
-            self.rate.sleep()
-
-if __name__ == '__main__':
-    sm = StateMachine()
-    try:
-        sm.check_states()
-    except ROSInterruptException:
+    def setup(self):
         pass
+
+    def execute(self):
+        while not rospy.is_shutdown():
+            outcome = self.state.execute()
+            if outcome in self.state.transitions:
+                next_state_name = self.state.transitions[outcome]
+                next_state = self.states[next_state_name]
+                rospy.loginfo('{}: Changing state {} -> {}'.format(rospy.get_name(), self.state, next_state))
+                self.state = next_state
+                self.state.setup()
+            elif outcome == 'running':
+                rospy.loginfo('{}: Currently running state {}'.format(rospy.get_name(), self.state))
+            else:
+                return outcome
+            
+            self.board.rate.sleep()
+
+    def add_state(self, state):
+        if len(self.states) == 0:
+            self.state = state
+        self.states[state.name] = state
+
+
