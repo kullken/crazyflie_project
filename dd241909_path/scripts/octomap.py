@@ -96,14 +96,12 @@ def plane_to_points(plane, cube_side, coll_rad):
     points = set()
     for z in zlinspace:
         zpart = z * zvec
+        start_zpart = start + zpart
         for xy in xylinspace:
             xypart = xy * xyvec
             for c in clinspace:
                 cpart = c * cvec
-                try:
-                    point = start + zpart + xypart + cpart
-                except:
-                    raise TypeError('Not compatible types: {} + {} + {} + {}'.format(type(start), type(zpart), type(xypart), type(cpart)))
+                point = start_zxypart + cpart
                 points.add(point)
 
     return points
@@ -115,13 +113,12 @@ class Octomap(object):
     def __init__(self, collision_points, gates, markers, airspace, grid_unit_size):
         self.gates          = gates
         self.markers        = markers
-        self.airspace       = airspace
+        self.airspace_min   = Vec3(*airspace['min'])
+        self.airspace_max   = Vec3(*airspace['max'])
         self.grid_unit_size = grid_unit_size
 
-        airspace_min = Vec3(*airspace['min'])
-        airspace_max = Vec3(*airspace['max'])
-        tree_center = (airspace_max + airspace_min) / 2
-        diff = airspace_max - airspace_min
+        tree_center = (self.airspace_max + self.airspace_min) / 2
+        diff = self.airspace_max - self.airspace_min
         tree_size = max(diff.x, diff.y, diff.z)
 
         # Calculate max depth for octree to achieve desired grid cube size
@@ -133,8 +130,8 @@ class Octomap(object):
                              tree_size, 
                              collision_points, 
                              max_depth, 
-                             airspace_min, 
-                             airspace_max)
+                             self.airspace_min, 
+                             self.airspace_max)
 
         return
 
@@ -196,6 +193,7 @@ class Octree(object):
             points_per_octant = self.split_by_octant(points, self.center)
             diagonal = Vec3(size/4, size/4, size/4)
 
+            # Generate subtrees
             for subcenter, subpoints in zip(centers, points_per_octant):
                 sub_bound_min = bound_min
                 sub_bound_max = bound_max
@@ -207,11 +205,19 @@ class Octree(object):
                 self.subtrees.append(Octree(subcenter, size/2, subpoints, 
                                             max_depth-1, sub_bound_min, sub_bound_max))
 
+            # Remove subtrees if all turn out to be occupied
+            for subtree in self.subtrees:
+                if not subtree.isoccupied:
+                    break
+            else:
+                self.isleaf = True
+                self.isoccupied = True
+                self.subtrees = []
+
         assert not (self.isfree and self.isoccupied)
         
         return
 
-        
     def split_by_octant(self, points, center):
         points_by_octant = [set(), set(), set(), set(), 
                             set(), set(), set(), set()]
@@ -247,22 +253,22 @@ class Octree(object):
 
         return [center + direct*size/4 for direct in directions]
 
-
     def query(self, points):
         """
         Input: 
-            points - list of points to query
+            points: iterable - points to query
 
         Output:
-            result - bool value of any point in points is colliding
+            result: bool - if any point in points is colliding
         """
-        rospy.logwarn('points: {}'.format(points))
-        if self.isleaf:
+        if not points:
+            return False
+        elif self.isleaf:
             return self.isoccupied
         else:
             points_per_octant = self.split_by_octant(points, self.center)
-            for octant, point_subset in zip(range(8), points_per_octant):
-                if self.subtrees[octant].query(point_subset):
+            for subtree, point_subset in zip(self.subtrees, points_per_octant):
+                if subtree.query(point_subset):
                     return True
             
             return False
@@ -351,7 +357,7 @@ class Vec3(object):
     def __mul__(self, other):
         return Vec3(self.x*other, self.y*other, self.z*other)
     def __rmul__(self, other):
-        return self.__mul__(other)
+        return Vec3(other*self.x, other*self.y, other*self.z)
 
     def __div__(self, other):
         return Vec3(self.x/other, self.y/other, self.z/other)

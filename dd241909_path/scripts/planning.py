@@ -9,9 +9,9 @@ class Node(object):
         self._xi = xi
         self._yi = yi
         self._wpi = wpi
-        # self.parent = parent
-        # self.cost = cost
-        # self.heuristic = heuristic
+
+    def __repr__(self):
+        return 'Node({}, {}, {})'.format(self.xi, self.yi, self.wpi)
 
     def __hash__(self):
         return hash(self.key)
@@ -56,16 +56,15 @@ class HeapPriorityQueue(object):
         item = self._dict.pop(key)
         return item
 
-    def __contains__(self, item):
-        """Return True if item is in queue, False otherwise"""
-        return item.key in self._dict
+    def __contains__(self, key):
+        return key in self._dict
 
     def get_item(self, key):
-        """Returns current time saved for given key"""
+        """Returns item saved with key."""
         return self._dict[key]
 
     def is_empty(self):
-        """Return True if queue is empty, False otherwise"""
+        """Return True if queue is empty, False otherwise."""
         return len(self._heap) == 0
 
     def size(self):
@@ -89,7 +88,7 @@ class HeapPriorityQueue(object):
         # Then push new node as usual
         self.push(newnode)
 
-    def remove_everything_before_wp_index(self, inputWpIndex):
+    def remove_everything_before_wp_index(self, input_wpi):
         """Remove all entries with wpi < input_wpi."""
         new_heap = []
         for entry in self._heap:

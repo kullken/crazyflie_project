@@ -1,7 +1,13 @@
 #!/usr/bin/env python
 
+from __future__ import division
+
 import math
 import json
+import copy
+import Queue
+from collections import namedtuple
+from itertools import count
 
 import rospy
 import tf2_ros
@@ -11,6 +17,7 @@ from geometry_msgs.msg import PoseStamped, Point
 from tf.transformations import quaternion_from_euler
 
 from octomap import create_map, Vec3
+from planning import HeapPriorityQueue, Node
 
 def transform_to_pose(tf):
     pose = PoseStamped()
@@ -49,10 +56,9 @@ class GlobalPlanner(object):
         collision_radius    = rospy.get_param(rospy.get_name() + '/collision_radius')
         tfprefix            = rospy.get_param(rospy.get_name() + '/tfprefix')
         trajectory_topic    = rospy.get_param(rospy.get_name() + '/trajectory_topic')
-        #plan_path_action    = rospy.get_param(rospy.get_name() + '/plan_path_action')
 
         # Publishers
-        self.traj_pub = rospy.Publisher(trajectory_topic, Path, queue_size=2)
+        self.traj_pub = rospy.Publisher(trajectory_topic, Path, queue_size=1)
 
         # Set up tf stuff
         if tfprefix:
@@ -62,27 +68,23 @@ class GlobalPlanner(object):
         self.tf_buff = tf2_ros.Buffer()
         self.tf_lstn = tf2_ros.TransformListener(self.tf_buff)
 
-        # Create action server
-        # self.server = actionlib.SimpleActionServer(plan_path_action, 
-        #                                            PlanGlobalPathAction, 
-        #                                            execute_cb=self.plan_cb,
-        #                                            auto_start=False
-        #                                            )
-
         # Parse world map
         rospy.loginfo(rospy.get_name() + ': Creating octomap...')
         with open(map_file, 'r') as file:
             data = json.load(file)
-        self.map = create_map(data, float(collision_radius))
+        self.map, points = create_map(data, collision_radius)
         rospy.loginfo(rospy.get_name() + ': Octomap created.')
 
         # Initialisation done, start action server
         # rospy.loginfo(rospy.get_name() + ': Starting {} action server...'.format(plan_path_action))
         # self.server.start()
 
+        return
+
     def start(self):
         # TODO: Add while not shutdown loop for online replanning
 
+        # Creates PoseStamped at every waypoint (inefficient legacy code)
         start_pose = newPoseStamped(0, 0, 0, 0, 0, 0, self.base_frame)
         start_pose = self.tf_buff.transform(start_pose, 'map', rospy.Duration(0.2))
         start_pose.pose.position.z = 0.4
@@ -90,29 +92,26 @@ class GlobalPlanner(object):
         for gate in self.map.gates:
             poses += self.get_gate_poses(gate)
 
+        # Convert to actual waypoints
+        Waypoint = namedtuple('Waypoint', ('x', 'y'))
+        waypoints = [Waypoint(pose.pose.position.x, pose.pose.position.y) for pose in poses]
+
+        # Run A*
+        path_2d = self.a_star(waypoints[0], waypoints[1:], self.map)
+
+        # Convert path of nodes to nav_msgs/Path
+        nav_poses = []
+        for node in path_2d:
+            x, y = self.index_to_exact(node.xi, node.yi)
+            pose = newPoseStamped(x, y, 0.4, 0, 0, 0, 'map')
+            nav_poses.append(pose)
+
         path = Path()
         path.header.frame_id = 'map'
         path.header.stamp = rospy.Time.now()
-        path.poses = poses
+        path.poses = nav_poses
 
         self.traj_pub.publish(path)
-
-    def plan_cb(self, goal):
-
-        poses = [goal.start]
-        for gate in self.map.gates:
-            poses += self.get_gate_poses(gate)
-        poses.append(goal.goal)
-
-        path = Path()
-        path.header.frame_id = 'map'
-        path.header.stamp = rospy.Time.now()
-        path.poses = poses
-
-        result = PlanGlobalPathResult()
-        result.path = path
-
-        self.server.set_succeeded(result)
 
     def get_gate_poses(self, gate):
         """Gets one pose before and one pose after gate."""
@@ -142,10 +141,114 @@ class GlobalPlanner(object):
          pose2.pose.orientation.z,
          pose2.pose.orientation.w) = quaternion_from_euler(0.0, 0.0, theta)
 
+        return [pose1, pose2]
+
+    def a_star(self, start, waypoints, map):
+        rospy.loginfo(rospy.get_name() + ': Running A*...')
+
+        self.grid_size = 0.05
+
+        # Dummy return variable
+        path = []
+
+        # Create start node
+        xi, yi = self.exact_to_index(*start)
+        startnode = Node(xi, yi, wpi=0)
+        startnode.parent = None
+        startnode.cost = 0
+        startnode.heuristic = self.heuristic(startnode, waypoints)
+
+        # A* loop setup
+        openset = HeapPriorityQueue()
+        openset.push(startnode)
+        closedset = set()
+        iter = 0
+
+        # A* main loop
+        while not openset.is_empty():
+            currentnode = openset.pop()
+            closedset.add(currentnode.key)
+
+            iter += 1
+            rospy.loginfo_throttle(1, rospy.get_name() + ': A* iteration {}'.format(iter))
+
+            if self.reached_goal(currentnode, waypoints):
+                path = self.retrace_path(currentnode)
+                break
+            else:
+                self.update_neighbours(currentnode, waypoints, map, openset, closedset)
+
+        if path:
+            rospy.loginfo(rospy.get_name() + ': A* succeded!')
+        else:
+            rospy.logwarn(rospy.get_name() + ': A* failed!')
+        return path
+
+    def update_neighbours(self, currentnode, waypoints, map, openset, closedset):
+
+        neighbours = {(dx,dy) for dx in (-1,0,1) for dy in (-1,0,1) if (dx or dy)}
+
+        for dx, dy in neighbours:
+            newnode = self.get_newnode(currentnode, dx, dy, waypoints)
+
+            x, y = self.index_to_exact(newnode.xi, newnode.yi)
+            position = Vec3(x, y, 0.4)
+
+            if newnode.key in closedset:
+                continue
+            elif map.query([position]):
+                continue
+            elif newnode.key in openset:
+                old_prio = openset.get_item(newnode.key).prio
+                if newnode.prio <= old_prio:
+                    openset.update_queue(newnode)
+            else:
+                openset.push(newnode)
+
+    def get_newnode(self, parent, dx, dy, waypoints):
+        newnode = Node(parent.xi+dx, parent.yi+dy, parent.wpi)
+        if self.reached_wp(newnode, waypoints[parent.wpi]):
+            newnode = Node(parent.xi+dx, parent.yi+dy, parent.wpi+1)
+
+        newnode.parent = parent
+        newnode.cost = parent.cost + (dx**2 + dy**2)**0.5 * self.grid_size
+        newnode.heuristic = self.heuristic(newnode, waypoints)
+        return newnode
+
+    def retrace_path(self, node):
+        path = []
+        while not node is None:
+            path.append(node)
+            node = node.parent
+        return reversed(path)
+
+    def reached_goal(self, node, waypoints):
+        return node.wpi == len(waypoints)
+
+    def reached_wp(self, node, waypoint):
+        nx, ny = self.index_to_exact(node.xi, node.yi)
+        wpx, wpy = waypoint.x, waypoint.y
+        return ((nx-wpx)**2 + (ny-wpy)**2)**0.5 <= 0.1
+
+    def heuristic(self, node, waypoints):
+        heuristic = 0
+        x1, y1 = self.index_to_exact(node.xi, node.yi)
+        for wp in waypoints[node.wpi:]:
+            x2, y2 = wp.x, wp.y
+            heuristic += ((x1-x2)**2 + (y1-y2)**2)**0.5
+            x1, y1 = x2, y2
+        return heuristic
+
+    def exact_to_index(self, x, y):
+        return int(math.floor(x / self.grid_size)), int(math.floor(y / self.grid_size))
+
+    def index_to_exact(self, xi, yi):
+        return xi * self.grid_size, yi * self.grid_size
+
+
         # rospy.logwarn('Pre-gate pose: {}'.format(pose1))
         # rospy.logwarn('Post-gate pose: {}'.format(pose2))
 
-        return [pose1, pose2]
 
 
 if __name__ == '__main__':

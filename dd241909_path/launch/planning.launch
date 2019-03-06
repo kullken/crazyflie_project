@@ -23,7 +23,7 @@
 
     <node pkg="dd241909_path" type="global_planner.py" name="global_planner" output="screen">
         <param name="map_file"              value="$(arg world_file)"/>
-        <param name="collision_radius"      value="0.1"/>
+        <param name="collision_radius"      value="0.0"/>
         <param name="tfprefix"              value="$(arg tfprefix)"/>
         <param name="trajectory_topic"      value="$(arg trajectory_topic)"/>
         <param name="plan_path_action"      value="$(arg plan_path_action)"/>

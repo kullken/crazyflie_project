@@ -17,7 +17,7 @@ from dd241909_msgs.msg import NavigateAction, NavigateResult
 
 class TrajectoryFollower(object):
 
-    tol = 0.07
+    tol = 0.08
 
     def __init__(self):
         rospy.init_node('trajectory_follower', log_level=rospy.INFO)
