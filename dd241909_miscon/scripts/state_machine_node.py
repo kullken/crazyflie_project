@@ -106,7 +106,7 @@ class HoverState(State):
         pass
 
     def execute(self):
-        rospy.loginfo(rospy.get_name() + ': Executing {}'.format(self.name))
+        rospy.loginfo_throttle(1, rospy.get_name() + ': Executing {}'.format(self.name))
         self.pose.header.stamp = rospy.Time.now()
         self.board.goal_pub.publish(self.pose)
         return 'running'

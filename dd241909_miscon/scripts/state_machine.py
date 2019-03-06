@@ -84,7 +84,7 @@ class StateMachine(State):
                 self.state = next_state
                 self.state.setup()
             elif outcome == 'running':
-                rospy.loginfo('{}: Currently running state {}'.format(rospy.get_name(), self.state))
+                rospy.loginfo_throttle(1, '{}: Currently running state {}'.format(rospy.get_name(), self.state))
             else:
                 return outcome
             
