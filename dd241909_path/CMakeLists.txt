@@ -9,14 +9,15 @@ project(dd241909_path)
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED COMPONENTS
   crazyflie_driver
-  geometry_msgs
-  nav_msgs
   rospy
   std_msgs
+  geometry_msgs
+  nav_msgs
   tf
   tf2_ros
   actionlib
   actionlib_msgs
+  visualization_msgs
 )
 
 ## System dependencies are found with CMake's conventions

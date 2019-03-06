@@ -14,6 +14,7 @@ import tf2_ros
 import tf2_geometry_msgs
 from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped, Point
+from visualization_msgs.msg import Marker, MarkerArray
 from tf.transformations import quaternion_from_euler
 
 from octomap import create_map, Vec3
@@ -52,6 +53,7 @@ class GlobalPlanner(object):
         rospy.loginfo(rospy.get_name() + ': Initialising node...')
 
         # Access ros parameters
+        use_rviz            = rospy.get_param(rospy.get_name() + '/use_rviz')
         map_file            = rospy.get_param(rospy.get_name() + '/map_file')
         collision_radius    = rospy.get_param(rospy.get_name() + '/collision_radius')
         tfprefix            = rospy.get_param(rospy.get_name() + '/tfprefix')
@@ -75,11 +77,13 @@ class GlobalPlanner(object):
         self.map, points = create_map(data, collision_radius)
         rospy.loginfo(rospy.get_name() + ': Octomap created.')
 
-        # Initialisation done, start action server
-        # rospy.loginfo(rospy.get_name() + ': Starting {} action server...'.format(plan_path_action))
-        # self.server.start()
+        # Publish map shapes to rviz
+        if use_rviz:
+            publish_map_to_rviz(self.map, points)
 
         return
+
+
 
     def start(self):
         # TODO: Add while not shutdown loop for online replanning
@@ -246,8 +250,103 @@ class GlobalPlanner(object):
         return xi * self.grid_size, yi * self.grid_size
 
 
-        # rospy.logwarn('Pre-gate pose: {}'.format(pose1))
-        # rospy.logwarn('Post-gate pose: {}'.format(pose2))
+def publish_map_to_rviz(map, points=[]):
+    rviz_marker_pub = rospy.Publisher('/visualization_marker_array', MarkerArray, queue_size=2)
+
+    # Clear all previous rviz markers
+    delete_msg = MarkerArray()
+    delete_marker = Marker()
+    delete_marker.action = Marker.DELETEALL
+    delete_msg.markers = [delete_marker]
+    rviz_marker_pub.publish(delete_msg)
+
+    occu_size2cube_map = {}
+    free_size2cube_map = {}
+    queue = Queue.Queue()
+    queue.put(map.octree)
+    while not queue.empty():
+        tree = queue.get()
+        if tree.isoccupied:
+            if not map.airspace_min < tree.center < map.airspace_max:
+                continue
+            if not tree.size in occu_size2cube_map:
+                occu_size2cube_map[tree.size] = set()
+            occu_size2cube_map[tree.size].add(tree.center)
+        elif tree.isfree:
+            if not map.airspace_min < tree.center < map.airspace_max:
+                continue
+            if not tree.size in free_size2cube_map:
+                free_size2cube_map[tree.size] = set()
+            free_size2cube_map[tree.size].add(tree.center)
+        else:
+            for subtree in tree.subtrees:
+                queue.put(subtree)
+
+    id_gen = count()
+    markers = []
+
+    for size, centers in occu_size2cube_map.items():
+        marker = Marker()
+        marker.header.frame_id = 'map'
+        marker.ns = 'collision_cubes'
+        marker.id = next(id_gen)
+        marker.type = Marker.CUBE_LIST
+        marker.action = Marker.ADD
+        marker.color.r = 1.0
+        marker.color.g = 0.0
+        marker.color.b = 0.0
+        marker.color.a = 0.6
+        marker.scale.x = size
+        marker.scale.y = size
+        marker.scale.z = size
+        marker.points = []
+        for c in centers:
+            marker.points.append(Point(x=c.x, y=c.y, z=c.z))
+        markers.append(marker)
+
+    for size, centers in free_size2cube_map.items():
+        marker = Marker()
+        marker.header.frame_id = 'map'
+        marker.ns = 'free_cubes'
+        marker.id = next(id_gen)
+        marker.type = Marker.CUBE_LIST
+        marker.action = Marker.ADD
+        marker.color.r = 0.0
+        marker.color.g = 1.0
+        marker.color.b = 0.0
+        marker.color.a = 0.2
+        marker.scale.x = size
+        marker.scale.y = size
+        marker.scale.z = size
+        marker.points = []
+        for c in centers:
+            marker.points.append(Point(x=c.x, y=c.y, z=c.z))
+        markers.append(marker)
+
+    marker = Marker()
+    marker.header.frame_id = 'map'
+    marker.ns = 'collision_points'
+    marker.id = next(id_gen)
+    marker.type = Marker.SPHERE_LIST
+    marker.action = Marker.ADD
+    marker.color.r = 0.0
+    marker.color.g = 0.0
+    marker.color.b = 1.0
+    marker.color.a = 0.5
+    marker.scale.x = 0.05
+    marker.scale.y = 0.05
+    marker.scale.z = 0.05
+    marker.points = []
+    for p in points:
+        marker.points.append(Point(x=p.x, y=p.y, z=p.z))
+    markers.append(marker)
+
+    marker_array = MarkerArray()
+    marker_array.markers = markers
+
+    rviz_marker_pub.publish(marker_array)
+
+    return
 
 
 

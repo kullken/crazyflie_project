@@ -7,7 +7,8 @@
     <arg name="navgoal_topic"           default="move_base_simple/goal"/>
     <arg name="trajectory_topic"        default="trajectory"/>
     <arg name="navigate_action"         default="navigate"/>
-    <arg name="plan_path_action"        default="plan_global_path"/>
+
+    <arg name="use_rviz"                default="true"/>
     
     <node pkg="dd241909_path" type="navgoal.py" name="navgoal">
         <param name="tfprefix"              value="$(arg tfprefix)"/>
@@ -26,6 +27,7 @@
         <param name="collision_radius"      value="0.0"/>
         <param name="tfprefix"              value="$(arg tfprefix)"/>
         <param name="trajectory_topic"      value="$(arg trajectory_topic)"/>
-        <param name="plan_path_action"      value="$(arg plan_path_action)"/>
+        
+        <param name="use_rviz"              value="$(arg use_rviz)"/>
     </node>
 </launch>
