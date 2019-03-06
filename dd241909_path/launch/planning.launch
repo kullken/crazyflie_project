@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 
 <launch>
-    <arg name="world_name"/>
+    <arg name="world_file"              default="$(find dd241909_launch)/worlds/maps/threeg.world.json"/>
     <arg name="tfprefix"                default=""/>
 
     <arg name="navgoal_topic"           default="move_base_simple/goal"/>
@@ -22,7 +22,7 @@
     </node>
 
     <node pkg="dd241909_path" type="global_planner.py" name="global_planner" output="screen">
-        <param name="map_file"  value="$(find dd241909_launch)/worlds/maps/$(arg world_name).world.json"/>
+        <param name="map_file"              value="$(arg world_file)"/>
         <param name="collision_radius"      value="0.1"/>
         <param name="tfprefix"              value="$(arg tfprefix)"/>
         <param name="trajectory_topic"      value="$(arg trajectory_topic)"/>
