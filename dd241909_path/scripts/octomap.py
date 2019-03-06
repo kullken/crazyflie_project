@@ -99,6 +99,7 @@ def plane_to_points(plane, cube_side, coll_rad):
         start_zpart = start + zpart
         for xy in xylinspace:
             xypart = xy * xyvec
+            start_zxypart = start_zpart + xypart
             for c in clinspace:
                 cpart = c * cvec
                 point = start_zxypart + cpart
