@@ -183,6 +183,7 @@ class GlobalPlanner(object):
                 self.update_neighbours(currentnode, waypoints, map, openset, closedset)
 
         if path:
+            rospy.loginfo(rospy.get_name() + ': A* iteration {}'.format(iter))
             rospy.loginfo(rospy.get_name() + ': A* succeded!')
         else:
             rospy.logwarn(rospy.get_name() + ': A* failed!')

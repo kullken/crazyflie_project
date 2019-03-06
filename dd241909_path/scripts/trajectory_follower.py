@@ -67,37 +67,39 @@ class TrajectoryFollower(object):
         self.traj = msg
 
     def navigate_cb(self, goal):
-        if not goal.start:
-            # goal.start == False is conceptually unneeded, perhaps replace with Empty msg-type?
-            return
+        try:
+            if not goal.start:
+                # goal.start == False is conceptually unneeded, perhaps replace with Empty msg-type?
+                self.nav_server.set_succeeded(NavigateResult(success=True)) # Successfully avoided doing anything
+                return
 
-        rospy.loginfo(rospy.get_name() + ': Off we go!')
-        for target in self.traj.poses:
-            rospy.loginfo(rospy.get_name() + ': Moving to new pose...')
-
-            current_pose = self.get_base_pose()
-
-            rospy.logwarn(rospy.get_name() + 'Distance to target = {}'.format(pose_dist(target.pose, current_pose.pose)))
-            while pose_dist(target.pose, current_pose.pose) >= self.tol:
-                rospy.logwarn(rospy.get_name() 
-                        + ': Target: \n{} \nCurrent: \n{}'.format(target.pose.position, current_pose.pose.position))
-                rospy.logwarn(rospy.get_name() 
-                        + ': Point distance = {}'.format(point_dist(target.pose.position, current_pose.pose.position)))
-                rospy.logwarn(rospy.get_name() 
-                        + ': Quaternion distance = {}'.format(quat_dist(target.pose.orientation, current_pose.pose.orientation)))
-                rospy.logwarn(rospy.get_name() 
-                        + ': Distance to target = {}'.format(pose_dist(target.pose, current_pose.pose)))
-
-                target.header.stamp = rospy.Time.now()
-                self.goal_pub.publish(target)
+            rospy.loginfo(rospy.get_name() + ': Off we go!')
+            for target in self.traj.poses:
+                rospy.loginfo(rospy.get_name() + ': Moving to new pose...')
 
                 current_pose = self.get_base_pose()
+                while pose_dist(target.pose, current_pose.pose) >= self.tol:
+                    # rospy.logwarn(rospy.get_name() 
+                    #         + ': Target: \n{} \nCurrent: \n{}'.format(target.pose.position, current_pose.pose.position))
+                    # rospy.logwarn(rospy.get_name() 
+                    #         + ': Point distance = {}'.format(point_dist(target.pose.position, current_pose.pose.position)))
+                    # rospy.logwarn(rospy.get_name() 
+                    #         + ': Quaternion distance = {}'.format(quat_dist(target.pose.orientation, current_pose.pose.orientation)))
+                    # rospy.logwarn(rospy.get_name() 
+                    #         + ': Distance to target = {}'.format(pose_dist(target.pose, current_pose.pose)))
 
-                # TODO: Check preemption
-                self.rate.sleep()
+                    target.header.stamp = rospy.Time.now()
+                    self.goal_pub.publish(target)
 
-        rospy.loginfo(rospy.get_name() + ': Trajectory done!')
-        self.nav_server.set_succeeded(NavigateResult(success=True))
+                    current_pose = self.get_base_pose()
+
+                    # TODO: Check preemption
+                    self.rate.sleep()
+
+            rospy.loginfo(rospy.get_name() + ': Trajectory done!')
+            self.nav_server.set_succeeded(NavigateResult(success=True))
+        except ROSInterruptException:
+            self.nav_server.set_succeeded(NavigateResult(success=False))
 
     def get_base_pose(self):
         current_pose = newPoseStamped(0, 0, 0, 0, 0, 0, self.base_frame)
@@ -106,7 +108,7 @@ class TrajectoryFollower(object):
             try:
                 return self.tf_buff.transform(current_pose, 'map', rospy.Duration(0.05))
             except ExtrapolationException:
-                rospy.logwarn_throttle(1.0, rospy.get_name() + 'cannot transform from {} to map'.format(self.base_frame))
+                rospy.logwarn_throttle(1.0, rospy.get_name() + ': Cannot transform from {} to map'.format(self.base_frame))
                 rate.sleep()
 
 
