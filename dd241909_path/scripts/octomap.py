@@ -29,6 +29,7 @@ def create_map(map_data, coll_rad, grid_unit_size=0.2, off_ground=0.2, side_marg
                                 gate['position'][1], 
                                 off_ground + gate['height']/2)
 
+    # Including points in return statement for visual debugging in rviz
     return Octomap(points, map_data['gates'], map_data['markers'], map_data['airspace'], grid_unit_size), points
 
 def gate_to_points(gate, cube_side, coll_rad, gate_size, off_ground, side_margin, z_max):
@@ -223,21 +224,27 @@ class Octree(object):
         points_by_octant = [set(), set(), set(), set(), 
                             set(), set(), set(), set()]
         for point in points:
-            if   point.x >= center.x and point.y >= center.y and point.z >= center.z:
+            if point.z >= center.z:
+                if point.y >= center.y:
+                    if point.x >= center.x:
                 points_by_octant[0].add(point)
-            elif point.x  < center.x and point.y >= center.y and point.z >= center.z:
+                    else:
                 points_by_octant[1].add(point)
-            elif point.x  < center.x and point.y  < center.y and point.z >= center.z:
+                else:
+                    if point.x  < center.x:
                 points_by_octant[2].add(point)
-            elif point.x >= center.x and point.y  < center.y and point.z >= center.z:
+                    else:
                 points_by_octant[3].add(point)
-            elif point.x >= center.x and point.y >= center.y and point.z  < center.z:
+            else:
+                if point.y >= center.y:
+                    if point.x >= center.x:
                 points_by_octant[4].add(point)
-            elif point.x  < center.x and point.y >= center.y and point.z  < center.z:
+                    else:
                 points_by_octant[5].add(point)
-            elif point.x  < center.x and point.y  < center.y and point.z  < center.z:
+                else:
+                    if point.x  < center.x:
                 points_by_octant[6].add(point)
-            elif point.x >= center.x and point.y  < center.y and point.z  < center.z:
+                    else:
                 points_by_octant[7].add(point)
 
         return points_by_octant
@@ -260,7 +267,7 @@ class Octree(object):
             points: iterable - points to query
 
         Output:
-            result: bool - if any point in points is colliding
+            result: bool - whether any queried points are colliding
         """
         if not points:
             return False
@@ -271,7 +278,6 @@ class Octree(object):
             for subtree, point_subset in zip(self.subtrees, points_per_octant):
                 if subtree.query(point_subset):
                     return True
-            
             return False
 
 
