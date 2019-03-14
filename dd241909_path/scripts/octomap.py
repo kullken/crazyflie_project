@@ -7,7 +7,10 @@ import numpy as np
 
 import rospy
 
-def create_map(map_data, coll_rad, grid_unit_size=0.2, off_ground=0.2, side_margin=0.1):
+from geometry import Vec3
+
+
+def create_octomap(map_data, coll_rad, grid_unit_size=0.1, off_ground=0.2, side_margin=0.1):
     """Create map object dictionary map_dict."""
 
     airspace_min = Vec3(*map_data['airspace']['min'])
@@ -227,25 +230,25 @@ class Octree(object):
             if point.z >= center.z:
                 if point.y >= center.y:
                     if point.x >= center.x:
-                points_by_octant[0].add(point)
+                        points_by_octant[0].add(point)
                     else:
-                points_by_octant[1].add(point)
+                        points_by_octant[1].add(point)
                 else:
                     if point.x  < center.x:
-                points_by_octant[2].add(point)
+                        points_by_octant[2].add(point)
                     else:
-                points_by_octant[3].add(point)
+                        points_by_octant[3].add(point)
             else:
                 if point.y >= center.y:
                     if point.x >= center.x:
-                points_by_octant[4].add(point)
+                        points_by_octant[4].add(point)
                     else:
-                points_by_octant[5].add(point)
+                        points_by_octant[5].add(point)
                 else:
                     if point.x  < center.x:
-                points_by_octant[6].add(point)
+                        points_by_octant[6].add(point)
                     else:
-                points_by_octant[7].add(point)
+                        points_by_octant[7].add(point)
 
         return points_by_octant
 
@@ -280,108 +283,6 @@ class Octree(object):
                     return True
             return False
 
-
-class Vec3(object):
-    __slots__ = '_x', '_y', '_z'
-
-    # To hopefully override at least some numpy operations
-    __array_priority__ = 100
-
-    def __init__(self, x, y, z):
-        self._x, self._y, self._z = x, y, z
-
-    @property
-    def x(self):
-        return self._x
-    @property
-    def y(self):
-        return self._y
-    @property
-    def z(self):
-        return self._z
-
-    def __getitem__(self, key):
-        if key == 0:
-            return self.x
-        elif key == 1:
-            return self.y
-        elif key == 2:
-            return self.z
-        else:
-            raise IndexError()
-
-    def __repr__(self):
-        return 'Vec3({}, {}, {})'.format(round(self.x, 4), round(self.y, 4), round(self.z, 4))
-    def __str__(self):
-        return 'Vec3({}, {}, {})'.format(round(self.x, 4), round(self.y, 4), round(self.z, 4))
-
-    def __hash__(self):
-        return hash((self.x, self.y, self.z))
-
-    def __len__(self):
-        return 3
-
-    def __getitem__(self, key):
-        if key == 0:
-            return self.x
-        elif key == 1:
-            return self.y
-        elif key == 2:
-            return self.z
-        else:
-            raise IndexError()
-
-    def __eq__(self, other):
-        return self.x == other.x and self.y == other.y and self.z == other.z
-    def __ne__(self, other):
-        return self.x != other.x or self.y != other.y or self.z != other.z
-
-    def __lt__(self, other):
-        return self.x < other.x and self.y < other.y and self.z < other.z
-    def __le__(self, other):
-        return self.x <= other.x and self.y <= other.y and self.z <= other.z
-    def __gt__(self, other):
-        return self.x > other.x and self.y > other.y and self.z > other.z
-    def __ge__(self, other):
-        return self.x >= other.x and self.y >= other.y and self.z >= other.z
-
-    def __abs__(self):
-        return (self.x**2 + self.y**2 + self.z**2)**0.5
-
-    def __neg__(self):
-        return Vec3(-self.x, -self.y, -self.z)
-
-    def __add__(self, other):
-        return Vec3(self.x+other.x, self.y+other.y, self.z+other.z)
-    def __radd__(self, other):
-        return self.__add__(other)
-
-    def __sub__(self, other):
-        return Vec3(self.x-other.x, self.y-other.y, self.z-other.z)
-    def __rsub__(self, other):
-        return Vec3(other.x-self.x, other.y-self.y, other.z-self.z)
-
-    def __mul__(self, other):
-        return Vec3(self.x*other, self.y*other, self.z*other)
-    def __rmul__(self, other):
-        return Vec3(other*self.x, other*self.y, other*self.z)
-
-    def __div__(self, other):
-        return Vec3(self.x/other, self.y/other, self.z/other)
-    def __truediv__(self, other):
-        return Vec3(self.x/other, self.y/other, self.z/other)
-
-    def unit(self):
-        return self/abs(self)
-
-    def dot(self, other):
-        return self.x*other.x + self.y*other.y + self.z*other.z
-
-    def cross(self, other):
-        x = self.y*other.z - self.z*other.y
-        y = self.z*other.x - self.x*other.z
-        z = self.x*other.y - self.y*other.x
-        return Vec3(x, y, z)
 
 
     

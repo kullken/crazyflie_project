@@ -17,8 +17,11 @@ from geometry_msgs.msg import PoseStamped, Point
 from visualization_msgs.msg import Marker, MarkerArray
 from tf.transformations import quaternion_from_euler
 
-from octomap import create_map, Vec3
-from planning import HeapPriorityQueue, Node
+from geometry import Vec3
+from kdmap import create_kdmap, Kdmap
+from octomap import create_octomap, Octomap
+from rrt import RRT
+from a_star import AStar
 
 def transform_to_pose(tf):
     pose = PoseStamped()
@@ -55,9 +58,9 @@ class GlobalPlanner(object):
         # Access ros parameters
         use_rviz            = rospy.get_param(rospy.get_name() + '/use_rviz')
         map_file            = rospy.get_param(rospy.get_name() + '/map_file')
-        collision_radius    = rospy.get_param(rospy.get_name() + '/collision_radius')
         tfprefix            = rospy.get_param(rospy.get_name() + '/tfprefix')
         trajectory_topic    = rospy.get_param(rospy.get_name() + '/trajectory_topic')
+        collision_radius    = rospy.get_param(rospy.get_namespace() + 'map/collision_radius')
 
         # Publishers
         self.traj_pub = rospy.Publisher(trajectory_topic, Path, queue_size=1)
@@ -71,19 +74,17 @@ class GlobalPlanner(object):
         self.tf_lstn = tf2_ros.TransformListener(self.tf_buff)
 
         # Parse world map
-        rospy.loginfo(rospy.get_name() + ': Creating octomap...')
+        rospy.loginfo(rospy.get_name() + ': Creating map...')
         with open(map_file, 'r') as file:
             data = json.load(file)
-        self.map, points = create_map(data, collision_radius)
-        rospy.loginfo(rospy.get_name() + ': Octomap created.')
+        self.map, points = create_octomap(data, collision_radius)
+        rospy.loginfo(rospy.get_name() + ': Map created.')
 
         # Publish map shapes to rviz
         if use_rviz:
             publish_map_to_rviz(self.map, points)
 
         return
-
-
 
     def start(self):
         # TODO: Add while not shutdown loop for online replanning
@@ -97,17 +98,18 @@ class GlobalPlanner(object):
             poses += self.get_gate_poses(gate)
 
         # Convert to actual waypoints
-        Waypoint = namedtuple('Waypoint', ('x', 'y'))
-        waypoints = [Waypoint(pose.pose.position.x, pose.pose.position.y) for pose in poses]
+        Waypoint = namedtuple('Waypoint', ('x', 'y', 'z', 'yaw'))
+        waypoints = [Waypoint(p.pose.position.x, p.pose.position.y, p.pose.position.z, 0.0) for p in poses]
 
-        # Run A*
-        path_2d = self.a_star(waypoints[0], waypoints[1:], self.map)
+        # Run path planning
+        #planner = RRT(self.map)
+        planner = AStar(self.map)
+        path = planner.plan_path(waypoints[0], waypoints[1:])
 
         # Convert path of nodes to nav_msgs/Path
         nav_poses = []
-        for node in path_2d:
-            x, y = self.index_to_exact(node.xi, node.yi)
-            pose = newPoseStamped(x, y, 0.4, 0, 0, 0, 'map')
+        for wp in path:
+            pose = newPoseStamped(wp.x, wp.y, wp.z, 0, 0, wp.yaw, 'map')
             nav_poses.append(pose)
 
         path = Path()
@@ -147,112 +149,9 @@ class GlobalPlanner(object):
 
         return [pose1, pose2]
 
-    def a_star(self, start, waypoints, map):
-        rospy.loginfo(rospy.get_name() + ': Running A*...')
 
-        self.grid_size = 0.05
-
-        # Dummy return variable
-        path = []
-
-        # Create start node
-        xi, yi = self.exact_to_index(*start)
-        startnode = Node(xi, yi, wpi=0)
-        startnode.parent = None
-        startnode.cost = 0
-        startnode.heuristic = self.heuristic(startnode, waypoints)
-
-        # A* loop setup
-        openset = HeapPriorityQueue()
-        openset.push(startnode)
-        closedset = set()
-        iter = 0
-
-        # A* main loop
-        while not openset.is_empty():
-            currentnode = openset.pop()
-            closedset.add(currentnode.key)
-
-            iter += 1
-            rospy.loginfo_throttle(1, rospy.get_name() + ': A* iteration {}'.format(iter))
-
-            if self.reached_goal(currentnode, waypoints):
-                path = self.retrace_path(currentnode)
-                break
-            else:
-                self.update_neighbours(currentnode, waypoints, map, openset, closedset)
-
-        if path:
-            rospy.loginfo(rospy.get_name() + ': A* iteration {}'.format(iter))
-            rospy.loginfo(rospy.get_name() + ': A* succeded!')
-        else:
-            rospy.logwarn(rospy.get_name() + ': A* failed!')
-        return path
-
-    def update_neighbours(self, currentnode, waypoints, map, openset, closedset):
-
-        neighbours = {(dx,dy) for dx in (-1,0,1) for dy in (-1,0,1) if (dx or dy)}
-
-        for dx, dy in neighbours:
-            newnode = self.get_newnode(currentnode, dx, dy, waypoints)
-
-            x, y = self.index_to_exact(newnode.xi, newnode.yi)
-            position = Vec3(x, y, 0.4)
-
-            if newnode.key in closedset:
-                continue
-            elif map.query([position]):
-                continue
-            elif newnode.key in openset:
-                old_prio = openset.get_item(newnode.key).prio
-                if newnode.prio <= old_prio:
-                    openset.update_queue(newnode)
-            else:
-                openset.push(newnode)
-
-    def get_newnode(self, parent, dx, dy, waypoints):
-        newnode = Node(parent.xi+dx, parent.yi+dy, parent.wpi)
-        if self.reached_wp(newnode, waypoints[parent.wpi]):
-            newnode = Node(parent.xi+dx, parent.yi+dy, parent.wpi+1)
-
-        newnode.parent = parent
-        newnode.cost = parent.cost + (dx**2 + dy**2)**0.5 * self.grid_size
-        newnode.heuristic = self.heuristic(newnode, waypoints)
-        return newnode
-
-    def retrace_path(self, node):
-        path = []
-        while not node is None:
-            path.append(node)
-            node = node.parent
-        return reversed(path)
-
-    def reached_goal(self, node, waypoints):
-        return node.wpi == len(waypoints)
-
-    def reached_wp(self, node, waypoint):
-        nx, ny = self.index_to_exact(node.xi, node.yi)
-        wpx, wpy = waypoint.x, waypoint.y
-        return ((nx-wpx)**2 + (ny-wpy)**2)**0.5 <= 0.1
-
-    def heuristic(self, node, waypoints):
-        heuristic = 0
-        x1, y1 = self.index_to_exact(node.xi, node.yi)
-        for wp in waypoints[node.wpi:]:
-            x2, y2 = wp.x, wp.y
-            heuristic += ((x1-x2)**2 + (y1-y2)**2)**0.5
-            x1, y1 = x2, y2
-        return heuristic
-
-    def exact_to_index(self, x, y):
-        return int(math.floor(x / self.grid_size)), int(math.floor(y / self.grid_size))
-
-    def index_to_exact(self, xi, yi):
-        return xi * self.grid_size, yi * self.grid_size
-
-
-def publish_map_to_rviz(map, points=[]):
-    rviz_marker_pub = rospy.Publisher('/visualization_marker_array', MarkerArray, queue_size=2)
+def publish_map_to_rviz(map, points):
+    rviz_marker_pub = rospy.Publisher('/map_marker_array', MarkerArray, queue_size=2)
 
     # Clear all previous rviz markers
     delete_msg = MarkerArray()
@@ -261,6 +160,80 @@ def publish_map_to_rviz(map, points=[]):
     delete_msg.markers = [delete_marker]
     rviz_marker_pub.publish(delete_msg)
 
+    rospy.sleep(0.5)
+
+    id_gen = count()
+
+    if type(map) == Kdmap:
+        markers = kdmap_to_msgs(map, id_gen)
+    else:
+        markers = octomap_to_msgs(map, id_gen)
+
+    markers.append(points_to_msg(points, id_gen))
+
+    marker_array = MarkerArray()
+    marker_array.markers = markers
+
+    #rospy.loginfo(rospy.get_name() + ': Publishing to rviz...\n{}'.format(marker_array))
+    rospy.sleep(0.5)
+
+    rviz_marker_pub.publish(marker_array)
+
+    return
+
+def kdmap_to_msgs(map, id_gen):
+    markers = []
+    queue = Queue.Queue()
+    queue.put(map.kdtree)
+    while not queue.empty():
+        tree = queue.get()
+        if tree.isoccupied:
+            mid_point = (tree.max + tree.min) / 2
+            size = tree.max - tree.min
+            marker = Marker()
+            marker.header.frame_id = 'map'
+            marker.ns = 'collision_cubes'
+            marker.id = next(id_gen)
+            marker.type = Marker.CUBE
+            marker.action = Marker.ADD
+            marker.color.r = 1.0
+            marker.color.g = 0.0
+            marker.color.b = 0.0
+            marker.color.a = 0.6
+            marker.pose.position.x = mid_point.x
+            marker.pose.position.y = mid_point.y
+            marker.pose.position.z = mid_point.z
+            marker.scale.x = size.x
+            marker.scale.y = size.y
+            marker.scale.z = size.z
+            markers.append(marker)
+        elif tree.isfree:
+            mid_point = (tree.max + tree.min) / 2
+            size = tree.max - tree.min
+            marker = Marker()
+            marker.header.frame_id = 'map'
+            marker.ns = 'free_cubes'
+            marker.id = next(id_gen)
+            marker.type = Marker.CUBE
+            marker.action = Marker.ADD
+            marker.color.r = 0.0
+            marker.color.g = 1.0
+            marker.color.b = 0.0
+            marker.color.a = 0.2
+            marker.pose.position.x = mid_point.x
+            marker.pose.position.y = mid_point.y
+            marker.pose.position.z = mid_point.z
+            marker.scale.x = size.x
+            marker.scale.y = size.y
+            marker.scale.z = size.z
+            markers.append(marker)
+        else:
+            queue.put(tree.low_tree)
+            queue.put(tree.high_tree)
+
+    return markers
+
+def octomap_to_msgs(map, id_gen):
     occu_size2cube_map = {}
     free_size2cube_map = {}
     queue = Queue.Queue()
@@ -283,7 +256,6 @@ def publish_map_to_rviz(map, points=[]):
             for subtree in tree.subtrees:
                 queue.put(subtree)
 
-    id_gen = count()
     markers = []
 
     for size, centers in occu_size2cube_map.items():
@@ -324,6 +296,9 @@ def publish_map_to_rviz(map, points=[]):
             marker.points.append(Point(x=c.x, y=c.y, z=c.z))
         markers.append(marker)
 
+    return markers
+
+def points_to_msg(points, id_gen):
     marker = Marker()
     marker.header.frame_id = 'map'
     marker.ns = 'collision_points'
@@ -340,14 +315,8 @@ def publish_map_to_rviz(map, points=[]):
     marker.points = []
     for p in points:
         marker.points.append(Point(x=p.x, y=p.y, z=p.z))
-    markers.append(marker)
-
-    marker_array = MarkerArray()
-    marker_array.markers = markers
-
-    rviz_marker_pub.publish(marker_array)
-
-    return
+        
+    return marker
 
 
 
