@@ -118,8 +118,8 @@ class TrajectoryFollower(object):
                 target.pose.position.z = 0.2
 
             while not rospy.is_shutdown():
-                    target.header.stamp = rospy.Time.now()
-                    self.goal_pub.publish(target)
+                target.header.stamp = rospy.Time.now()
+                self.goal_pub.publish(target)
                 # TODO: Check preemption
                 self.rate.sleep()
                 
@@ -129,7 +129,7 @@ class TrajectoryFollower(object):
     def land_cb(self, goal):
         try:
             rospy.loginfo(rospy.get_name() + ': Landing...')
-                    current_pose = self.get_base_pose()
+            current_pose = self.get_base_pose()
             target = current_pose
 
             while not rospy.is_shutdown() and current_pose.pose.position.z > 0.1:
@@ -137,8 +137,8 @@ class TrajectoryFollower(object):
                 target.pose.position.z = current_pose.pose.position.z - 0.05
                 target.header.stamp = rospy.Time.now()
                 self.goal_pub.publish(target)
-                    # TODO: Check preemption
-                    self.rate.sleep()
+                # TODO: Check preemption
+                self.rate.sleep()
 
             self.land_server.set_succeeded(SimpleResult(success=True))
         except ROSInterruptException:
