@@ -15,6 +15,8 @@ find_package(catkin REQUIRED COMPONENTS
   tf
   tf2_ros
   actionlib
+  py_trees
+  py_trees_ros
   dd241909_msgs
 )
 

@@ -13,6 +13,7 @@ from rospy.exceptions import ROSInterruptException
 from tf2_ros import ExtrapolationException
 
 from dd241909_msgs.msg import NavigateAction, NavigateResult
+from dd241909_msgs.msg import SimpleAction, SimpleResult
 
 
 class TrajectoryFollower(object):
@@ -26,16 +27,18 @@ class TrajectoryFollower(object):
         self.rate = rospy.Rate(10)
 
         # Access ros parameters
-        tfprefix         = rospy.get_param(rospy.get_name() + '/tfprefix')
-        goal_topic       = rospy.get_param(rospy.get_name() + '/navgoal_topic')
-        trajectory_topic = rospy.get_param(rospy.get_name() + '/trajectory_topic')
-        navigate_action  = rospy.get_param(rospy.get_name() + '/navigate_action')
+        tfprefix            = rospy.get_param(rospy.get_name() + '/tfprefix')
+        goal_topic          = rospy.get_param(rospy.get_name() + '/navgoal_topic')
+        trajectory_topic    = rospy.get_param(rospy.get_name() + '/trajectory_topic')
+        navigate_action     = rospy.get_param(rospy.get_name() + '/navigate_action')
+        hover_action        = rospy.get_param(rospy.get_name() + '/hover_action')
+        land_action         = rospy.get_param(rospy.get_name() + '/land_action')
 
         # Subscribers
         self.traj_sub = rospy.Subscriber(trajectory_topic, Path, self.traj_cb)
 
         # Publishers
-        self.goal_pub = rospy.Publisher(goal_topic, PoseStamped, queue_size=2)
+        self.goal_pub = rospy.Publisher(goal_topic, PoseStamped, queue_size=1)
 
         # Set up tf stuff
         if tfprefix:
@@ -45,26 +48,44 @@ class TrajectoryFollower(object):
         self.tf_buff = tf2_ros.Buffer()
         self.tf_lstn = tf2_ros.TransformListener(self.tf_buff)
 
-        # Action server
-        self.nav_server = actionlib.SimpleActionServer(navigate_action, 
+        # Action servers
+        self.nav_server = actionlib.SimpleActionServer(
+            navigate_action, 
                                                        NavigateAction, 
                                                        execute_cb=self.navigate_cb,
                                                        auto_start=False
                                                        )
+        self.hover_server = actionlib.SimpleActionServer(
+            hover_action, 
+            SimpleAction, 
+            execute_cb=self.hover_cb,
+            auto_start=False
+        )
+        self.land_server = actionlib.SimpleActionServer(
+            land_action, 
+            SimpleAction, 
+            execute_cb=self.land_cb,
+            auto_start=False
+        )
 
-        # Wait for first message
+        # Hover and land servers can start immedietly
+        rospy.loginfo(rospy.get_name() + ': Starting {} action server...'.format(hover_action))
+        self.hover_server.start()
+        rospy.loginfo(rospy.get_name() + ': Starting {} action server...'.format(land_action))
+        self.land_server.start()
+
+        # Wait for first message before starting navigation server
         rospy.loginfo(rospy.get_name() + ': Waiting for trajectory...')
         rospy.wait_for_message(trajectory_topic, Path)
         rospy.loginfo(rospy.get_name() + ': Trajectory recieved.')
 
-        
-        # Initialisation done, start action server
         rospy.loginfo(rospy.get_name() + ': Starting {} action server...'.format(navigate_action))
         self.nav_server.start()
 
     def traj_cb(self, msg):
         rospy.loginfo(rospy.get_name() + ': New trajectory recieved.')
         self.traj = msg
+        # TODO: Reset loop in naviagte_cb since trajectory has been updated
 
     def navigate_cb(self, goal):
         try:
@@ -76,23 +97,11 @@ class TrajectoryFollower(object):
             rospy.loginfo(rospy.get_name() + ': Off we go!')
             for target in self.traj.poses:
                 rospy.loginfo(rospy.get_name() + ': Moving to new pose...')
-
                 current_pose = self.get_base_pose()
                 while pose_dist(target.pose, current_pose.pose) >= self.tol:
-                    # rospy.logwarn(rospy.get_name() 
-                    #         + ': Target: \n{} \nCurrent: \n{}'.format(target.pose.position, current_pose.pose.position))
-                    # rospy.logwarn(rospy.get_name() 
-                    #         + ': Point distance = {}'.format(point_dist(target.pose.position, current_pose.pose.position)))
-                    # rospy.logwarn(rospy.get_name() 
-                    #         + ': Quaternion distance = {}'.format(quat_dist(target.pose.orientation, current_pose.pose.orientation)))
-                    # rospy.logwarn(rospy.get_name() 
-                    #         + ': Distance to target = {}'.format(pose_dist(target.pose, current_pose.pose)))
-
                     target.header.stamp = rospy.Time.now()
                     self.goal_pub.publish(target)
-
                     current_pose = self.get_base_pose()
-
                     # TODO: Check preemption
                     self.rate.sleep()
 
@@ -100,6 +109,40 @@ class TrajectoryFollower(object):
             self.nav_server.set_succeeded(NavigateResult(success=True))
         except ROSInterruptException:
             self.nav_server.set_succeeded(NavigateResult(success=False))
+
+    def hover_cb(self, goal):
+        try:
+            rospy.loginfo(rospy.get_name() + ': Hovering...')
+            target = self.get_base_pose()
+            if target.pose.position.z < 0.2:
+                target.pose.position.z = 0.2
+
+            while not rospy.is_shutdown():
+                    target.header.stamp = rospy.Time.now()
+                    self.goal_pub.publish(target)
+                # TODO: Check preemption
+                self.rate.sleep()
+                
+        except ROSInterruptException:
+            pass
+
+    def land_cb(self, goal):
+        try:
+            rospy.loginfo(rospy.get_name() + ': Landing...')
+                    current_pose = self.get_base_pose()
+            target = current_pose
+
+            while not rospy.is_shutdown() and current_pose.pose.position.z > 0.1:
+                current_pose = self.get_base_pose()
+                target.pose.position.z = current_pose.pose.position.z - 0.05
+                target.header.stamp = rospy.Time.now()
+                self.goal_pub.publish(target)
+                    # TODO: Check preemption
+                    self.rate.sleep()
+
+            self.land_server.set_succeeded(SimpleResult(success=True))
+        except ROSInterruptException:
+            pass
 
     def get_base_pose(self):
         current_pose = newPoseStamped(0, 0, 0, 0, 0, 0, self.base_frame)

@@ -69,6 +69,8 @@
   <exec_depend>tf2_ros</exec_depend>
 
   <depend>actionlib</depend>
+  <depend>py_trees</depend>
+  <depend>py_trees_ros</depend>
   <depend>dd241909_msgs</depend>
 
 
