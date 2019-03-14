@@ -16,8 +16,10 @@ def profile(func):
 
     def _exit():
         s = StringIO.StringIO()
-        ps = pstats.Stats(pr, stream=s).sort_stats('cumulative')
-        ps.print_stats()
+        ps = pstats.Stats(pr, stream=s)
+        ps.strip_dirs()
+        ps.sort_stats('cumulative')
+        ps.print_stats(30)
         print(s.getvalue())
     atexit.register(_exit)
     return wrapper
