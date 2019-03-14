@@ -5,14 +5,9 @@
     <arg name="hover_action"            default="hover"/>
     <arg name="land_action"             default="land"/>
 
-    <!-- Visualise behaviour tree in rqt -->
-    <arg name="use_rqt_tree"            default="false"/>
-
     <node pkg="dd241909_miscon" type="behaviour_tree.py" name="behaviour_tree" output="screen">
         <param name="navigate_action"       value="$(arg navigate_action)"/>
         <param name="hover_action"          value="$(arg hover_action)"/>
         <param name="land_action"           value="$(arg land_action)"/>
     </node>
-
-    <node pkg="rqt_py_trees" type="rqt_py_trees" name="rqt_py_trees" if="$(arg use_rqt_tree)"/>
 </launch>
