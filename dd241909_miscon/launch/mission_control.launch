@@ -1,9 +1,13 @@
 <?xml version="1.0"?>
 
 <launch>
-    <arg name="navgoal_topic"       default="move_base_simple/goal"/>
+    <arg name="navigate_action"         default="navigate"/>
+    <arg name="hover_action"            default="hover"/>
+    <arg name="land_action"             default="land"/>
 
-    <node pkg="dd241909_miscon" type="state_machine_node.py" name="state_machine">
-        <param name="navgoal_topic"     value="$(arg navgoal_topic)"/>
+    <node pkg="dd241909_miscon" type="behaviour_tree.py" name="behaviour_tree" output="screen">
+        <param name="navigate_action"       value="$(arg navigate_action)"/>
+        <param name="hover_action"          value="$(arg hover_action)"/>
+        <param name="land_action"           value="$(arg land_action)"/>
     </node>
 </launch>

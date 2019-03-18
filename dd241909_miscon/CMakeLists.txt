@@ -14,6 +14,10 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
   tf
   tf2_ros
+  actionlib
+  py_trees
+  py_trees_ros
+  dd241909_msgs
 )
 
 ## System dependencies are found with CMake's conventions
