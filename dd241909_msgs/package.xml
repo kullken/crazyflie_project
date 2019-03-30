@@ -50,7 +50,9 @@
   <!--   <doc_depend>doxygen</doc_depend> -->
   <buildtool_depend>catkin</buildtool_depend>
   <build_depend>actionlib_msgs</build_depend>
+  <build_depend>crazyflie_driver</build_depend>
   <exec_depend>actionlib_msgs</exec_depend>
+  <exec_depend>crazyflie_driver</exec_depend>
 
 
   <!-- The export tag contains other, unspecified, tags -->
