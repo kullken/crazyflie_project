@@ -1,2 +1,12 @@
-waypoint_tolerance: 0.1
-goal_sample_prob: 0.1
+iterations: 500
+goal_sample_prob: 0.2
+connect_trees_prob: 0.2
+
+max_step_length: 0.5
+min_step_time: 0.2
+max_step_time: 10
+
+waypoint_position_tolerance: 0.05
+waypoint_velocity_tolerance: 0.1
+waypoint_gate_distance: 0.1
+waypoint_gate_velocity: 0.2

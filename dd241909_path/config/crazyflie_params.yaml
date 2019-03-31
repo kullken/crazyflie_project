@@ -1,0 +1,3 @@
+collision_radius: 0.08
+vel_max: 0.5
+acc_max: 1.5

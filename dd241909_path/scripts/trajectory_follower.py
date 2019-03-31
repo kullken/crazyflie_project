@@ -62,8 +62,8 @@ class TrajectoryFollower(object):
         self.nav_server = actionlib.SimpleActionServer(
                 navigate_action, 
                 NavigateAction, 
-                execute_cb=self.navigate_path_cb,
-                #execute_cb=self.navigate_traj_cb,
+                #execute_cb=self.navigate_path_cb,
+                execute_cb=self.navigate_traj_cb,
                 auto_start=False
         )
         self.hover_server = actionlib.SimpleActionServer(

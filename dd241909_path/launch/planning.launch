@@ -5,28 +5,30 @@
     <arg name="tfprefix"                default=""/>
 
     <arg name="navgoal_topic"           default="move_base_simple/goal"/>
+    <arg name="path_topic"              default="path"/>
     <arg name="trajectory_topic"        default="trajectory"/>
-    <!--arg name="gates_cleared_topic"     default="gates_cleared"/-->
     <arg name="navigate_action"         default="navigate"/>
     <arg name="hover_action"            default="hover"/>
     <arg name="land_action"             default="land"/>
 
     <arg name="use_rviz"                default="true"/>
 
+    <rosparam command="load" file="$(find dd241909_path)/config/crazyflie_params.yaml" ns="crazyflie"/>
     <rosparam command="load" file="$(find dd241909_path)/config/map_params.yaml" ns="map"/>
     <rosparam command="load" file="$(find dd241909_path)/config/rrt_params.yaml" ns="rrt"/>
     
-    <node pkg="dd241909_path" type="navgoal.py" name="navgoal">
+    <!--node pkg="dd241909_path" type="navgoal.py" name="navgoal">
         <param name="tfprefix"              value="$(arg tfprefix)"/>
         <param name="navgoal_topic"         value="$(arg navgoal_topic)"/>
-        <param name="cmdpos_topic"         value="cmd_position"/>
-    </node>
+        <param name="cmdpos_topic"          value="cmd_position"/>
+    </node-->
 
     <node pkg="dd241909_path" type="trajectory_follower.py" name="trajectory_follower" output="screen">
         <param name="tfprefix"              value="$(arg tfprefix)"/>
         <param name="navgoal_topic"         value="$(arg navgoal_topic)"/>
+        <param name="path_topic"            value="$(arg path_topic)"/>
         <param name="trajectory_topic"      value="$(arg trajectory_topic)"/>
-        <!--param name="gates_cleared_topic"   value="$(arg gates_cleared_topic)"/-->
+        <param name="cmdfull_topic"         value="cmd_full_state"/>
         <param name="navigate_action"       value="$(arg navigate_action)"/>
         <param name="hover_action"          value="$(arg hover_action)"/>
         <param name="land_action"           value="$(arg land_action)"/>
@@ -35,6 +37,7 @@
     <node pkg="dd241909_path" type="global_planner.py" name="global_planner" output="screen">
         <param name="map_file"              value="$(arg world_file)"/>
         <param name="tfprefix"              value="$(arg tfprefix)"/>
+        <param name="path_topic"            value="$(arg path_topic)"/>
         <param name="trajectory_topic"      value="$(arg trajectory_topic)"/>
         <param name="use_rviz"              value="$(arg use_rviz)"/>
     </node>
