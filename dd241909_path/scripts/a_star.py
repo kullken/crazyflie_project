@@ -20,9 +20,6 @@ class AStar(object):
     def plan_path(self, start_wp, waypoints):
         rospy.loginfo('A*: Starting...')
 
-        # Dummy return variable
-        path = []
-
         # Create start node
         xi, yi = self.exact_to_index(start_wp.x, start_wp.y)
         startnode = Node(xi, yi, wpi=0)
@@ -45,18 +42,18 @@ class AStar(object):
             rospy.loginfo_throttle(1, 'A*: Iteration {}'.format(iter))
 
             if self.reached_goal(currentnode, waypoints):
-                path = self.retrace_path(currentnode)
-                break
+                rospy.loginfo('A*: Goal reached, success!')
+                rospy.loginfo('A*: {} total iterations'.format(iter))
+                path, path_cost = self.retrace_path(currentnode)
+                rospy.loginfo('A*: Total path cost: {}'.format(path_cost))
+                return path
             else:
                 self.update_neighbours(currentnode, waypoints, openset, closedset)
 
-        if path:
-            rospy.loginfo('A*: Goal reached, success!')
-            rospy.loginfo('A*: {} total iterations'.format(iter))
-        else:
-            rospy.logwarn('A*: Failed!')
-            rospy.loginfo('A*: {} total iterations'.format(iter))
-        return path
+        
+        rospy.logwarn('A*: Failed!')
+        rospy.loginfo('A*: {} total iterations'.format(iter))
+        return []
 
     def update_neighbours(self, currentnode, waypoints, openset, closedset):
 
@@ -90,6 +87,7 @@ class AStar(object):
         return newnode
 
     def retrace_path(self, node):
+        cost = node.cost
         Waypoint = namedtuple('Waypoint', ('x', 'y', 'z', 'yaw'))
         path = []
         while not node is None:
@@ -97,7 +95,7 @@ class AStar(object):
             path.append(Waypoint(x, y, 0.4, 0))
             node = node.parent
         path.reverse()
-        return path
+        return path, cost
 
     def reached_goal(self, node, waypoints):
         return node.wpi == len(waypoints)
