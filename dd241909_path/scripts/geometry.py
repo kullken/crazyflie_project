@@ -3,6 +3,17 @@
 from __future__ import division
 
 
+
+# Since math.isclose() does not exist in python 2.7
+# Inspired by example provided by PEP author
+def isclose(a, b, rel_tol=1e-9, abs_tol=0.0):
+    if a == b:
+        return True
+    diff = abs(b - a)
+    return (((diff <= abs(rel_tol * b)) or
+             (diff <= abs(rel_tol * a))) or
+             (diff <= abs_tol))
+
 class Vec3(object):
     __slots__ = '_x', '_y', '_z'
 
