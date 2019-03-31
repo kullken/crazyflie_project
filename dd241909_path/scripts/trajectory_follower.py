@@ -1,17 +1,21 @@
 #!/usr/bin/env python
 
 import math
+import numpy as np
 
 import rospy
 import tf2_ros
 import tf2_geometry_msgs
 import actionlib
 from nav_msgs.msg import Path
-from geometry_msgs.msg import PoseStamped, Pose, Point
+from geometry_msgs.msg import PoseStamped, Pose, Twist, Point, Vector3
 from tf.transformations import quaternion_from_euler
 from rospy.exceptions import ROSInterruptException
 from tf2_ros import ExtrapolationException
 
+from crazyflie_driver.msg import FullState
+
+from dd241909_msgs.msg import Trajectory
 from dd241909_msgs.msg import NavigateAction, NavigateResult
 from dd241909_msgs.msg import SimpleAction, SimpleResult
 
@@ -29,16 +33,22 @@ class TrajectoryFollower(object):
         # Access ros parameters
         tfprefix            = rospy.get_param(rospy.get_name() + '/tfprefix')
         goal_topic          = rospy.get_param(rospy.get_name() + '/navgoal_topic')
+        path_topic          = rospy.get_param(rospy.get_name() + '/path_topic')
         trajectory_topic    = rospy.get_param(rospy.get_name() + '/trajectory_topic')
+        cmdfull_topic       = rospy.get_param(rospy.get_name() + '/cmdfull_topic')
         navigate_action     = rospy.get_param(rospy.get_name() + '/navigate_action')
         hover_action        = rospy.get_param(rospy.get_name() + '/hover_action')
         land_action         = rospy.get_param(rospy.get_name() + '/land_action')
 
         # Subscribers
-        self.traj_sub = rospy.Subscriber(trajectory_topic, Path, self.traj_cb)
+        self.path = None
+        self.path_sub = rospy.Subscriber(path_topic, Path, self.path_cb)
+        self.traj = None
+        self.traj_sub = rospy.Subscriber(trajectory_topic, Trajectory, self.traj_cb)
 
         # Publishers
         self.goal_pub = rospy.Publisher(goal_topic, PoseStamped, queue_size=1)
+        self.cmdfull_pub = rospy.Publisher(cmdfull_topic, FullState, queue_size=1)
 
         # Set up tf stuff
         if tfprefix:
@@ -50,52 +60,51 @@ class TrajectoryFollower(object):
 
         # Action servers
         self.nav_server = actionlib.SimpleActionServer(
-            navigate_action, 
-                                                       NavigateAction, 
-                                                       execute_cb=self.navigate_cb,
-                                                       auto_start=False
-                                                       )
+                navigate_action, 
+                NavigateAction, 
+                execute_cb=self.navigate_path_cb,
+                #execute_cb=self.navigate_traj_cb,
+                auto_start=False
+        )
         self.hover_server = actionlib.SimpleActionServer(
-            hover_action, 
-            SimpleAction, 
-            execute_cb=self.hover_cb,
-            auto_start=False
+                hover_action, 
+                SimpleAction, 
+                execute_cb=self.hover_cb,
+                auto_start=False
         )
         self.land_server = actionlib.SimpleActionServer(
-            land_action, 
-            SimpleAction, 
-            execute_cb=self.land_cb,
-            auto_start=False
+                land_action, 
+                SimpleAction, 
+                execute_cb=self.land_cb,
+                auto_start=False
         )
 
-        # Hover and land servers can start immedietly
+        # Start action servers
+        rospy.loginfo(rospy.get_name() + ': Starting {} action server...'.format(navigate_action))
+        self.nav_server.start()
         rospy.loginfo(rospy.get_name() + ': Starting {} action server...'.format(hover_action))
         self.hover_server.start()
         rospy.loginfo(rospy.get_name() + ': Starting {} action server...'.format(land_action))
         self.land_server.start()
 
-        # Wait for first message before starting navigation server
-        rospy.loginfo(rospy.get_name() + ': Waiting for trajectory...')
-        rospy.wait_for_message(trajectory_topic, Path)
-        rospy.loginfo(rospy.get_name() + ': Trajectory recieved.')
-
-        rospy.loginfo(rospy.get_name() + ': Starting {} action server...'.format(navigate_action))
-        self.nav_server.start()
+    def path_cb(self, msg):
+        rospy.loginfo(rospy.get_name() + ': New path recieved.')
+        self.path = msg
 
     def traj_cb(self, msg):
         rospy.loginfo(rospy.get_name() + ': New trajectory recieved.')
         self.traj = msg
-        # TODO: Reset loop in naviagte_cb since trajectory has been updated
 
-    def navigate_cb(self, goal):
+    def navigate_path_cb(self, goal):
         try:
-            if not goal.start:
-                # goal.start == False is conceptually unneeded, perhaps replace with Empty msg-type?
-                self.nav_server.set_succeeded(NavigateResult(success=True)) # Successfully avoided doing anything
-                return
+            while not self.path:
+                rospy.loginfo_throttle(10, rospy.get_name() + ': Waiting for path...')
+                self.rate.sleep()
+            rospy.loginfo(rospy.get_name() + ': Path recieved.')
 
             rospy.loginfo(rospy.get_name() + ': Off we go!')
-            for target in self.traj.poses:
+            path = self.path
+            for target in path.poses:
                 rospy.loginfo(rospy.get_name() + ': Moving to new pose...')
                 current_pose = self.get_base_pose()
                 while pose_dist(target.pose, current_pose.pose) >= self.tol:
@@ -105,10 +114,81 @@ class TrajectoryFollower(object):
                     # TODO: Check preemption
                     self.rate.sleep()
 
-            rospy.loginfo(rospy.get_name() + ': Trajectory done!')
+            rospy.loginfo(rospy.get_name() + ': Path Completed!')
             self.nav_server.set_succeeded(NavigateResult(success=True))
         except ROSInterruptException:
-            self.nav_server.set_succeeded(NavigateResult(success=False))
+            self.nav_server.set_aborted(NavigateResult(success=False))
+
+    def navigate_traj_cb(self, goal):
+        try:
+            while not self.traj:
+                rospy.loginfo_throttle(10, rospy.get_name() + ': Waiting for trajectory...')
+                self.rate.sleep()
+            rospy.loginfo(rospy.get_name() + ': Trajectory recieved.')
+
+            cmd_rate = rospy.Rate(20)
+
+            # Start of trajectory
+            t0 = rospy.Time.now()
+            # Accumulated duration of passed trajectory pieces
+            passed_t = rospy.Duration(0)
+
+            rospy.loginfo(rospy.get_name() + ': Off we go!')
+            for piece in self.traj.pieces:
+                rospy.loginfo(rospy.get_name() + ': New trajectory piece!')
+
+                nrterms = len(piece.poly_x)
+
+                # Position coefficients
+                C_pos = np.zeros((4, nrterms))
+                for i in range(nrterms):
+                    C_pos[0, i] = (i+1) * piece.poly_x[i]
+                    C_pos[1, i] = (i+1) * piece.poly_y[i]
+                    C_pos[2, i] = (i+1) * piece.poly_z[i]
+                    C_pos[3, i] = (i+1) * piece.poly_yaw[i]
+
+                # Velocity coefficients
+                C_vel = np.zeros((4, nrterms))
+                for i in range(nrterms-1):
+                    C_vel[0, i] = (i+1) * C_pos[0, i+1]
+                    C_vel[1, i] = (i+1) * C_pos[1, i+1]
+                    C_vel[2, i] = (i+1) * C_pos[2, i+1]
+                    C_vel[3, i] = (i+1) * C_pos[3, i+1]
+
+                # Acceleration coefficients
+                C_acc = np.zeros((4, nrterms))
+                for i in range(nrterms-2):
+                    C_acc[0, i] = (i+1) * C_vel[0,i+1]
+                    C_acc[1, i] = (i+1) * C_vel[1,i+1]
+                    C_acc[2, i] = (i+1) * C_vel[2,i+1]
+                    C_acc[3, i] = (i+1) * C_vel[3,i+1]
+
+                t = rospy.Time.now() - t0 - passed_t # For first comparision
+                while t <= piece.duration:
+                    t = rospy.Time.now() - t0 - passed_t
+                    tsec = t.to_sec()
+                    tv = np.power([tsec]*nrterms, range(nrterms))
+                    #tv = np.array([1, tsec, tsec**2, tsec**3])
+                    posyaw = np.dot(C_pos, tv)
+                    velyaw = np.dot(C_vel, tv)
+                    accyaw = np.dot(C_acc, tv)
+
+                    msg = FullState()
+                    msg.header.frame_id = self.traj.header.frame_id
+                    msg.pose  = newPose(posyaw[0], posyaw[1], posyaw[2], 0.0, 0.0, posyaw[3])
+                    msg.twist = newTwist(velyaw[0], velyaw[1], velyaw[2], 0.0, 0.0, velyaw[3])
+                    msg.acc   = Vector3(accyaw[0], accyaw[1], accyaw[2])
+
+                    self.cmdfull_pub.publish(msg)
+                    cmd_rate.sleep()
+
+                # When piece is done update passed_t
+                passed_t += piece.duration
+
+            rospy.loginfo(rospy.get_name() + ': Trajectory completed!')
+            self.nav_server.set_succeeded(NavigateResult(success=True))
+        except ROSInterruptException:
+            self.nav_server.set_aborted(NavigateResult(success=False))
 
     def hover_cb(self, goal):
         try:
@@ -124,7 +204,7 @@ class TrajectoryFollower(object):
                 self.rate.sleep()
                 
         except ROSInterruptException:
-            pass
+            self.hover_server.set_aborted(SimpleResult(success=False))
 
     def land_cb(self, goal):
         try:
@@ -142,7 +222,7 @@ class TrajectoryFollower(object):
 
             self.land_server.set_succeeded(SimpleResult(success=True))
         except ROSInterruptException:
-            pass
+            self.land_server.set_aborted(NavigateResult(success=False))
 
     def get_base_pose(self):
         current_pose = newPoseStamped(0, 0, 0, 0, 0, 0, self.base_frame)
@@ -172,6 +252,25 @@ def newPoseStamped(x, y, z, roll, pitch, yaw, frame_id, stamp=None):
         pose.header.stamp = stamp
 
     return pose
+
+def newPose(x, y, z, roll, pitch, yaw):
+    pose = Pose()
+    pose.position = Point(x=x, y=y, z=z)
+    (pose.orientation.x,
+     pose.orientation.y,
+     pose.orientation.z,
+     pose.orientation.w) = quaternion_from_euler(roll, pitch, yaw)
+    return pose
+
+def newTwist(x, y, z, roll, pitch, yaw):
+    twist = Twist() 
+    twist.linear.x = x
+    twist.linear.y = y
+    twist.linear.z = z
+    twist.angular.x = roll
+    twist.angular.y = pitch
+    twist.angular.z = yaw
+    return twist
 
 def point_dist(p1, p2):
     return math.sqrt((p1.x-p2.x)**2 + (p1.y-p2.y)**2 + (p1.z-p2.z)**2)
