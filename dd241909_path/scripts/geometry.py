@@ -9,7 +9,7 @@ from collections import namedtuple
 
 # Since math.isclose() does not exist in python 2.7
 # Inspired by example provided by PEP author
-def isclose(a, b, rel_tol=1e-9, abs_tol=0.0):
+def isclose(a, b, rel_tol=1e-9, abs_tol=1e-9):
     if a == b:
         return True
     diff = abs(b - a)
