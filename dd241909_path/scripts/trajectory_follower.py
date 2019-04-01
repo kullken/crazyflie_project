@@ -145,10 +145,10 @@ class TrajectoryFollower(object):
                 # Position coefficients
                 C_pos = np.zeros((4, nrterms))
                 for i in range(nrterms):
-                    C_pos[0, i] = (i+1) * piece.poly_x[i]
-                    C_pos[1, i] = (i+1) * piece.poly_y[i]
-                    C_pos[2, i] = (i+1) * piece.poly_z[i]
-                    C_pos[3, i] = (i+1) * piece.poly_yaw[i]
+                    C_pos[0, i] = piece.poly_x[i]
+                    C_pos[1, i] = piece.poly_y[i]
+                    C_pos[2, i] = piece.poly_z[i]
+                    C_pos[3, i] = piece.poly_yaw[i]
 
                 # Velocity coefficients
                 C_vel = np.zeros((4, nrterms))
@@ -171,7 +171,6 @@ class TrajectoryFollower(object):
                     t = rospy.Time.now() - t0 - passed_t
                     tsec = t.to_sec()
                     tv = np.power([tsec]*nrterms, range(nrterms))
-                    #tv = np.array([1, tsec, tsec**2, tsec**3])
                     posyaw = np.dot(C_pos, tv)
                     velyaw = np.dot(C_vel, tv)
                     accyaw = np.dot(C_acc, tv)
