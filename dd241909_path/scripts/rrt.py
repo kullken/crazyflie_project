@@ -421,7 +421,9 @@ class BiRRT(object):
         elif not newnode is None:
             start_tree.add(newnode)
 
-        for iter in xrange(1, self.iterations+1):
+        iter = 0
+        while not rospy.is_shutdown() and iter <= self.iterations:
+            iter += 1
 
             rospy.loginfo_throttle(1, 'RRT: Iteration {}'.format(iter))
 
