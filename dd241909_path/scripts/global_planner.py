@@ -144,10 +144,19 @@ class GlobalPlanner(object):
                 0.4, 0.0, 0.0, 0.0, 0.0
         )
 
+        # Waypoints in front of and after each gate
         waypoints = [start_wp, takeoff_wp]
         for gate in self.map.gates:
             before_wp, after_wp = self.gate_to_waypoints(gate)
             waypoints.extend([before_wp, after_wp])
+
+        # Last waypoint 0.5 m after last gate
+        theta = self.map.gates[-1]['heading'] * 2*math.pi/360
+        normal = Vec3(math.cos(theta), math.sin(theta), 0.0)
+        pos = self.map.gates[-1]['position'] + 0.5*normal
+        vel = self.wp_gate_vel * normal
+        last_wp = Waypoint(pos.x, pos.y, pos.z, vel.x, vel.y, vel.z, 0.0)
+        waypoints.append(last_wp)
 
         return waypoints
 
@@ -158,8 +167,8 @@ class GlobalPlanner(object):
         pos1 = gate['position'] - self.wp_gate_dist*normal
         pos2 = gate['position'] + self.wp_gate_dist*normal
 
-        vel1 = self.wp_gate_vel*normal
-        vel2 = self.wp_gate_vel*normal
+        vel1 = self.wp_gate_vel * normal
+        vel2 = self.wp_gate_vel * normal
 
         wp1 = Waypoint(pos1.x, pos1.y, pos1.z, vel1.x, vel1.y, vel1.z, 0.0)
         wp2 = Waypoint(pos2.x, pos2.y, pos2.z, vel2.x, vel2.y, vel2.z, 0.0)

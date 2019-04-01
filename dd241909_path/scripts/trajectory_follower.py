@@ -14,6 +14,7 @@ from rospy.exceptions import ROSInterruptException
 from tf2_ros import ExtrapolationException
 
 from crazyflie_driver.msg import FullState
+from crazyflie_driver.srv import Stop
 
 from dd241909_msgs.msg import Trajectory
 from dd241909_msgs.msg import NavigateAction, NavigateResult
@@ -28,7 +29,8 @@ class TrajectoryFollower(object):
         rospy.init_node('trajectory_follower', log_level=rospy.INFO)
         rospy.loginfo(rospy.get_name() + ': Initialising node...')
 
-        self.rate = rospy.Rate(10)
+        self.wait_rate = rospy.Rate(10) # Wait for stuff at this rate
+        self.cmd_rate = rospy.Rate(20) # Send commands at this rate
 
         # Access ros parameters
         tfprefix            = rospy.get_param(rospy.get_name() + '/tfprefix')
@@ -36,6 +38,7 @@ class TrajectoryFollower(object):
         path_topic          = rospy.get_param(rospy.get_name() + '/path_topic')
         trajectory_topic    = rospy.get_param(rospy.get_name() + '/trajectory_topic')
         cmdfull_topic       = rospy.get_param(rospy.get_name() + '/cmdfull_topic')
+        stop_srv_name       = rospy.get_param(rospy.get_name() + '/stop_srv_name')
         navigate_action     = rospy.get_param(rospy.get_name() + '/navigate_action')
         hover_action        = rospy.get_param(rospy.get_name() + '/hover_action')
         land_action         = rospy.get_param(rospy.get_name() + '/land_action')
@@ -57,6 +60,10 @@ class TrajectoryFollower(object):
             self.base_frame = 'base_link'
         self.tf_buff = tf2_ros.Buffer()
         self.tf_lstn = tf2_ros.TransformListener(self.tf_buff)
+
+        # Service clients
+        rospy.wait_for_service(stop_srv_name)
+        self.stop_srv = rospy.ServiceProxy(stop_srv_name, Stop)
 
         # Action servers
         self.nav_server = actionlib.SimpleActionServer(
@@ -88,18 +95,16 @@ class TrajectoryFollower(object):
         self.land_server.start()
 
     def path_cb(self, msg):
-        rospy.loginfo(rospy.get_name() + ': New path recieved.')
         self.path = msg
 
     def traj_cb(self, msg):
-        rospy.loginfo(rospy.get_name() + ': New trajectory recieved.')
         self.traj = msg
 
     def navigate_path_cb(self, goal):
         try:
             while not self.path:
                 rospy.loginfo_throttle(10, rospy.get_name() + ': Waiting for path...')
-                self.rate.sleep()
+                self.wait_rate.sleep()
             rospy.loginfo(rospy.get_name() + ': Path recieved.')
 
             rospy.loginfo(rospy.get_name() + ': Off we go!')
@@ -112,7 +117,7 @@ class TrajectoryFollower(object):
                     self.goal_pub.publish(target)
                     current_pose = self.get_base_pose()
                     # TODO: Check preemption
-                    self.rate.sleep()
+                    self.cmd_rate.sleep()
 
             rospy.loginfo(rospy.get_name() + ': Path Completed!')
             self.nav_server.set_succeeded(NavigateResult(success=True))
@@ -123,10 +128,8 @@ class TrajectoryFollower(object):
         try:
             while not self.traj:
                 rospy.loginfo_throttle(10, rospy.get_name() + ': Waiting for trajectory...')
-                self.rate.sleep()
+                self.wait_rate.sleep()
             rospy.loginfo(rospy.get_name() + ': Trajectory recieved.')
-
-            cmd_rate = rospy.Rate(20)
 
             # Start of trajectory
             t0 = rospy.Time.now()
@@ -180,7 +183,7 @@ class TrajectoryFollower(object):
                     msg.acc   = Vector3(accyaw[0], accyaw[1], accyaw[2])
 
                     self.cmdfull_pub.publish(msg)
-                    cmd_rate.sleep()
+                    self.cmd_rate.sleep()
 
                 # When piece is done update passed_t
                 passed_t += piece.duration
@@ -201,7 +204,7 @@ class TrajectoryFollower(object):
                 target.header.stamp = rospy.Time.now()
                 self.goal_pub.publish(target)
                 # TODO: Check preemption
-                self.rate.sleep()
+                self.cmd_rate.sleep()
                 
         except ROSInterruptException:
             self.hover_server.set_aborted(SimpleResult(success=False))
@@ -214,11 +217,20 @@ class TrajectoryFollower(object):
 
             while not rospy.is_shutdown() and current_pose.pose.position.z > 0.1:
                 current_pose = self.get_base_pose()
-                target.pose.position.z = current_pose.pose.position.z - 0.05
+                z_error = current_pose.pose.position.z - 0.1
+                if abs(z_error) < 0.05:
+                    target.pose.position.z = 0.1
+                else:
+                    target.pose.position.z = current_pose.pose.position.z - math.copysign(0.05, z_error)
+
                 target.header.stamp = rospy.Time.now()
                 self.goal_pub.publish(target)
                 # TODO: Check preemption
-                self.rate.sleep()
+                self.cmd_rate.sleep()
+
+            rospy.loginfo(rospy.get_name() + ': Calling stop service...')
+            self.stop_srv(0)
+            rospy.loginfo(rospy.get_name() + ': Landing completed.')
 
             self.land_server.set_succeeded(SimpleResult(success=True))
         except ROSInterruptException:

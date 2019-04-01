@@ -29,6 +29,7 @@
         <param name="path_topic"            value="$(arg path_topic)"/>
         <param name="trajectory_topic"      value="$(arg trajectory_topic)"/>
         <param name="cmdfull_topic"         value="cmd_full_state"/>
+        <param name="stop_srv_name"         value="stop"/>
         <param name="navigate_action"       value="$(arg navigate_action)"/>
         <param name="hover_action"          value="$(arg hover_action)"/>
         <param name="land_action"           value="$(arg land_action)"/>
