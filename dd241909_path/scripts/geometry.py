@@ -162,6 +162,19 @@ class Bezier(object):
                 coeffs.append(prod * sum)
             return coeffs
 
+    @staticmethod
+    def newPenticBezier(pos1, vel1, acc1, pos2, vel2, acc2, T):
+        # Initial conditions
+        p0 = pos1
+        p1 = T/5 * vel1 + p0
+        p2 = T**2/20 * acc1 + 2*p1 - p0
+
+        p5 = pos2
+        p4 = -T/5 * vel2 + p5
+        p3 = T**2/20 * acc2 + 2*p4 - p5
+
+        return Bezier([p0, p1, p2, p3, p4, p5], T)
+
 
 class Vec3(object):
     __slots__ = '_x', '_y', '_z'

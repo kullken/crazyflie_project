@@ -416,7 +416,7 @@ class BiRRT(object):
         newnode = self.steer(startnode, goalnode)
         if newnode == goalnode:
             rospy.loginfo('RRT: Goal reached at first try!')
-            finalnode = self.build_finalnode(newnode, goalnode)
+            finalnode = self.find_finalnode(newnode, goalnode)
             return finalnode
         elif not newnode is None:
             start_tree.add(newnode)
@@ -462,7 +462,7 @@ class BiRRT(object):
                 rospy.loginfo('RRT: {} total iterations'.format(iter))
                 rospy.loginfo('RRT: {} nodes in start tree'.format(len(start_tree)))
                 rospy.loginfo('RRT: {} nodes in goal tree'.format(len(goal_tree)))
-                finalnode = self.build_finalnode(start_candidate, goal_candidate)
+                finalnode = self.find_finalnode(start_candidate, goal_candidate)
                 return finalnode
         
         rospy.logwarn('RRT: Failed!')
@@ -513,17 +513,31 @@ class BiRRT(object):
         targetnode = RRTNode(stop, targetnode.vel, targetnode.yaw)
 
         for T in np.linspace(self.min_step_time, self.max_step_time, num=11):
-            bezier = newQuarticBezier(connectnode, targetnode, T, reverse)
-            if self.check_bezier(bezier):
-                if reverse:
-                    targetnode.child = connectnode
-                    targetnode.child_traj = bezier
-                    targetnode.cost_to_go = connectnode.cost_to_go + self.cost(connectnode, targetnode, reverse)
+            if reverse:
+                bezier = Bezier.newPenticBezier(
+                        targetnode.pos,
+                        targetnode.vel,
+                        Vec3(0, 0, 0),
+                        connectnode.pos,
+                        connectnode.vel,
+                        connectnode.acc,
+                        T
+                )
+                if self.check_bezier(bezier):
+                    RRTNode.link_nodes(targetnode, connectnode, bezier)
                     return targetnode
-                else:
-                    targetnode.parent = connectnode
-                    targetnode.parent_traj = bezier
-                    targetnode.cost = connectnode.cost + self.cost(connectnode, targetnode)
+            else:
+                bezier = Bezier.newPenticBezier(
+                        connectnode.pos,
+                        connectnode.vel,
+                        connectnode.acc,
+                        targetnode.pos,
+                        targetnode.vel,
+                        Vec3(0, 0, 0),
+                        T
+                )
+                if self.check_bezier(bezier):
+                    RRTNode.link_nodes(connectnode, targetnode, bezier)
                     return targetnode
         
         return
@@ -564,15 +578,13 @@ class BiRRT(object):
         path = []
         traj = []
         while not node is None:
-            path.append(Waypoint(node.pos.x,
-                                 node.pos.y,
-                                 node.pos.z,
-                                 node.vel.x,
-                                 node.vel.y,
-                                 node.vel.z,
-                                 node.yaw))
-            traj.append(node.parent_traj)
-            node = node.parent
+            path.append(Waypoint(
+                    node.x, node.y, node.z,
+                    node.vx, node.vy, node.vz,
+                    node.yaw
+            ))
+            traj.append(node.prev_traj)
+            node = node.prev_node
         path.reverse()
         traj.reverse()
         return path, traj, cost
@@ -588,15 +600,13 @@ class BiRRT(object):
         path = []
         traj = []
         while not node is None:
-            path.append(Waypoint(node.pos.x,
-                                 node.pos.y,
-                                 node.pos.z,
-                                 node.vel.x,
-                                 node.vel.y,
-                                 node.vel.z,
-                                 node.yaw))
-            traj.append(node.parent_traj)
-            node = node.parent
+            path.append(Waypoint(
+                    node.x, node.y, node.z,
+                    node.vx, node.vy, node.vz,
+                    node.yaw
+            ))
+            traj.append(node.prev_traj)
+            node = node.prev_node
         path.reverse()
         traj.reverse()
 
@@ -606,50 +616,48 @@ class BiRRT(object):
     def refine_trajectory(self, startnode, endnode):
 
         def get_nodes(startnode, endnode, split=False):
-            """Extract list nodes from .parent attribute chain. Optionally split long trajectories."""
+            """Extract list nodes from .prev_node attribute chain. Optionally split long trajectories."""
             split_threshold = 2
             nodes = []
             node = endnode
-            while not node is startnode.parent:
-                if not split or node.parent_traj.T < split_threshold:
+            while not node is startnode:
+                if not split or node.prev_traj.T < split_threshold:
                     nodes.append(node)
-                    node = node.parent
+                    node = node.prev_node
                 else:
-                    lower_bezier, upper_bezier = node.parent_traj.split(node.parent_traj.T/2)
+                    lower_bezier, upper_bezier = node.prev_traj.split(node.prev_traj.T/2)
 
                     newnode = RRTNode(upper_bezier.pos(0), upper_bezier.vel(0), node.yaw)
-                    newnode.parent = node.parent
-                    newnode.parent_traj = lower_bezier
-                    newnode.cost = newnode.parent.cost + self.cost(newnode.parent, newnode)
-
-                    node.parent = newnode
-                    node.parent_traj = upper_bezier
-                    node.cost = node.parent.cost + self.cost(node.parent, node)
+                    RRTNode.link_nodes(node.prev_node, newnode, lower_bezier)
+                    RRTNode.link_nodes(newnode, node, upper_bezier)
 
                     nodes.append(node)
                     nodes.append(newnode)
-                    node = newnode.parent
-
+                    node = newnode.prev_node
+            
+            nodes.append(startnode)
             nodes.reverse()
             return nodes
         
         nodes = get_nodes(startnode, endnode)
-
-        # Pair-wise optimisation with higher order bezier curve
+        
+        # Pair-wise optimisation (Should this be done? Equivalent principle as in steer. Higher order perhaps?)
+        pre_cost = endnode.cost
         for node1, node2 in zip(nodes[:-1], nodes[1:]):
-            current_T = node2.parent_traj.T
-            best_bezier = node2.parent_traj
+            current_T = node2.cost - node1.cost
+            assert isclose(current_T, node2.prev_traj.T)
+            best_bezier = None
 
-            acc1 = node1.parent_traj.acc(-1)
-            acc2 = node2.parent_traj.acc(-1)
-
-            for T in np.linspace(current_T, current_T/2, 5):
-                bezier = newPenticBezier(node1.pos, node1.vel, acc1, node2.pos, node2.vel, acc2, T)
+            for T in np.linspace(current_T, current_T/2, 5)[1:]:
+                bezier = Bezier.newPenticBezier(node1.pos, node1.vel, node1.acc, node2.pos, node2.vel, node2.acc, T)
                 if self.check_bezier(bezier):
                     best_bezier = bezier
             
-            node2.parent_traj = best_bezier
-            node2.cost = node1.cost + self.cost(node1, node2)
+            if not best_bezier is None:
+                RRTNode.link_nodes(node1, node2, best_bezier)
+
+        post_cost = endnode.cost
+        print('RRT: Pairwise saved {} seconds'.format(round(pre_cost - post_cost, 4)))
 
         # Iteratively skip one node optimisation
         node_skipped = True
@@ -663,62 +671,41 @@ class BiRRT(object):
                     node1 = nodes[i]
                     node2 = nodes[i+2]
 
-                    acc1 = node1.parent_traj.acc(-1)
-                    acc2 = node2.parent_traj.acc(-1)
-
-                    #T_diff = node2.cost - node1.cost
-                    T_diff = node2.parent_traj.T + node2.parent.parent_traj.T
+                    current_T = node2.cost - node1.cost
                     best_bezier = None
 
-                    for T in np.linspace(T_diff, T_diff/8, 11)[1:]:
-                        bezier = newPenticBezier(node1.pos, node1.vel, acc1, node2.pos, node2.vel, acc2, T)
+                    for T in np.linspace(current_T, current_T/8, 11)[1:]:
+                        bezier = Bezier.newPenticBezier(node1.pos, node1.vel, node1.acc, node2.pos, node2.vel, node2.acc, T)
                         if self.check_bezier(bezier):
                             best_bezier = bezier
                     
                     if best_bezier is None:
                         i += 1
                     else:
-                        node2.parent = node1
-                        node2.parent_traj = best_bezier
-                        node2.cost = node1.cost + self.cost(node1, node2)
-                        print('Skipped node! dT = {}'.format(round(T_diff - T, 4)))
+                        RRTNode.link_nodes(node1, node2, best_bezier)
+                        print('Skipped node! dT = {}'.format(round(current_T - T, 4)))
                         node_skipped = True
                         i += 2
 
         return
 
     @staticmethod
-    def build_finalnode(backwards_node, forwards_node):
+    def find_finalnode(backwards_node, forwards_node):
         # Dangerous if nodes not equal
         assert backwards_node == forwards_node
 
-        # Warn about discontinuity in acceleration
-        acc1 = backwards_node.parent_traj.acc(backwards_node.parent_traj.T)
-        acc2 = forwards_node.child_traj.acc(0)
-        acc_jump = round(abs(acc1 - acc2), 4)
-        rospy.logwarn('RRT: Jump in acceleration is {} m/s^2'.format(acc_jump))
+        # Connect the two branches
+        if forwards_node.next_node is None:
+            return backwards_node
+        else:
+            RRTNode.link_nodes(backwards_node, forwards_node.next_node, forwards_node.next_traj)
 
-        # Ad-hoc node merge
-        backwards_node.child = forwards_node.child
-        backwards_node.child_traj = forwards_node.child_traj
-        backwards_node.cost_to_go = forwards_node.cost_to_go
+            # Iterate forward until end if chain
+            node = backwards_node
+            while not node.next_node is None:
+                node = node.next_node
 
-        # Add parent related attributes to the chain of child nodes
-        child = backwards_node.child
-        parent = backwards_node
-        while not child is None:
-            child.parent = parent
-            child.parent_traj = parent.child_traj
-            child.cost = parent.cost + parent.cost_to_go - child.cost_to_go
-
-            parent = child
-            child = child.child
-
-        return parent
-
-    @staticmethod
-    def wp_to_node(wp):
-        return RRTNode(Vec3(wp.x, wp.y, wp.z), Vec3(wp.vx, wp.vy, wp.vz), wp.yaw)
+            return node
 
     @staticmethod
     def startnode_from_wp(wp):
@@ -733,9 +720,7 @@ class BiRRT(object):
         bezier = Bezier([p0, p1, p2], T)
 
         startnode = RRTNode(pos, vel, wp.yaw)
-        startnode.parent = None
-        startnode.parent_traj = bezier
-        startnode.cost = 0
+        startnode.set_prev_link(None, bezier)
 
         return startnode
 
@@ -752,18 +737,10 @@ class BiRRT(object):
         bezier = Bezier([p0, p1, p2], T)
 
         goalnode = RRTNode(pos, vel, wp.yaw)
-        goalnode.child = None
-        goalnode.child_traj = bezier
-        goalnode.cost_to_go = 0
+        goalnode.set_next_link(None, bezier)
 
         return goalnode
 
-    @staticmethod
-    def cost(startnode, endnode, reverse=False):
-        if reverse:
-            return endnode.child_traj.T
-        else:
-            return endnode.parent_traj.T
 
 
 class RRTTree(object):
@@ -865,41 +842,51 @@ class NearestNeighbourGrid(object):
 
 class RRTNode(object):
 
-    def __init__(self, pos, vel, yaw):
+    def __init__(self, pos, vel, yaw=0.0):
         self._pos = pos
         self._vel = vel
         self._acc = None
         self._yaw = yaw 
 
     def __repr__(self):
-        return 'RRTNode({}, {}, {}, {})'.format(round(self.x, 4), 
-                                                round(self.y, 4), 
-                                                round(self.z, 4), 
-                                                round(self.yaw, 4))
+        return 'RRTNode(pos: ({}, {}, {}), vel: ({}, {}, {}), yaw: {})'.format(
+                round(self.x, 4), 
+                round(self.y, 4), 
+                round(self.z, 4), 
+                round(self.vx, 4), 
+                round(self.vy, 4), 
+                round(self.vz, 4), 
+                round(self.yaw, 4))
 
-    # def __hash__(self):
-    #     return hash(self.key)
     def __nonzero__(self):
         return True
 
     def __eq__(self, other):
         if isinstance(other, RRTNode):
-            return (    self._pos == other._pos 
-                    and self._vel == other._vel 
-                    and isclose(self._yaw, other._yaw))
+            if not self._acc is None and not other._acc is None:
+                return (    self._pos == other._pos 
+                        and self._vel == other._vel 
+                        and self._acc == other._acc 
+                        and isclose(self._yaw, other._yaw))
+            else:
+                return (    self._pos == other._pos 
+                        and self._vel == other._vel 
+                        and isclose(self._yaw, other._yaw))
         else:
             return False
     def __ne__(self, other):
         if isinstance(other, RRTNode):
-            return (   self._pos != other._pos 
-                    or self._vel != other._vel 
-                    or not isclose(self._yaw, other._yaw))
+            if not self._acc is None and not other._acc is None:
+                return (   self._pos != other._pos 
+                        or self._vel != other._vel 
+                        or self._acc != other._acc 
+                        or isclose(self._yaw, other._yaw))
+            else:
+                return (   self._pos != other._pos 
+                        or self._vel != other._vel 
+                        or isclose(self._yaw, other._yaw))
         else:
             return True
-
-    # @property
-    # def key(self):
-    #     return (self.pos, self.yaw)
 
     @property
     def pos(self):
@@ -926,10 +913,91 @@ class RRTNode(object):
     @property
     def vz(self):
         return self._vel.z
+
+    @property
+    def acc(self):
+        return self._acc
     
     @property
     def yaw(self):
         return self._yaw
+
+    @property
+    def next_node(self):
+        return self._next_node
+    @property
+    def next_traj(self):
+        return self._next_traj
+    @property
+    def prev_node(self):
+        return self._prev_node
+    @property
+    def prev_traj(self):
+        return self._prev_traj
+
+    @property
+    def cost(self):
+        return self._cost
+    @cost.setter
+    def cost(self, newcost):
+        self._cost = newcost
+        try:
+            self._next_node.cost = self._cost + self._next_traj.T
+        except AttributeError:
+            pass
+    @property
+    def cost_to_goal(self):
+        return self._cost_to_goal
+    @cost_to_goal.setter
+    def cost_to_goal(self, newcost):
+        self._cost_to_goal = newcost
+        try:
+            self._prev_node.cost_to_goal = self._cost_to_goal + self._prev_traj.T
+        except AttributeError:
+            pass
+
+    def set_next_link(self, next_node, next_traj):
+        assert self._pos == next_traj.pos(0)
+        assert self._vel == next_traj.vel(0)
+        if self._acc is None:
+            self._acc = next_traj.acc(0)
+        else:
+            assert self._acc == next_traj.acc(0)
+
+        self._next_node = next_node
+        self._next_traj = next_traj
+
+        if next_node is None:
+            self.cost_to_goal = 0
+        else:
+            try:
+                self.cost_to_goal = next_node.cost_to_goal + next_traj.T
+            except AttributeError:
+                pass
+
+    def set_prev_link(self, prev_node, prev_traj):
+        assert self._pos == prev_traj.pos(-1)
+        assert self._vel == prev_traj.vel(-1)
+        if self._acc is None:
+            self._acc = prev_traj.acc(0)
+        else:
+            assert self._acc == prev_traj.acc(0)
+
+        self._prev_node = prev_node
+        self._prev_traj = prev_traj
+
+        if prev_node is None:
+            self.cost = 0
+        else:
+            try:
+                self.cost = prev_node.cost + prev_traj.T
+            except AttributeError:
+                pass
+
+    @staticmethod
+    def link_nodes(node1, node2, traj):
+        node1.set_next_link(node2, traj)
+        node2.set_prev_link(node1, traj)
 
 
 def newCubicBezier(parentnode, targetnode, T):
@@ -970,18 +1038,6 @@ def newQuarticBezier(connectnode, targetnode, T, reverse=False):
         p2 = Vec3(p2.x, p2.y, (p0.z + p4.z) / 2)
 
     return Bezier([p0, p1, p2, p3, p4], T)
-
-def newPenticBezier(pos1, vel1, acc1, pos2, vel2, acc2, T):
-    # Initial conditions
-    p0 = pos1
-    p1 = T/5 * vel1 + p0
-    p2 = T**2/20 * acc1 + 2*p1 - p0
-
-    p5 = pos2
-    p4 = -T/5 * vel2 + p5
-    p3 = T**2/20 * acc2 + 2*p4 - p5
-
-    return Bezier([p0, p1, p2, p3, p4, p5], T)
 
 def publish_tree_to_rviz(tree):
     rviz_marker_pub = rospy.Publisher('/tree_marker', Marker, queue_size=3)
