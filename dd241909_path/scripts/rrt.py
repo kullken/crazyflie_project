@@ -10,10 +10,13 @@ import rospy
 from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker
 
-from geometry import Vec3, Line, Bezier, Waypoint, isclose
+#from geometry import Vec3, Line, Bezier, Waypoint, isclose
 
 from myprofiling import profile
 
+import pyximport
+pyximport.install()
+from cgeometry import Vec3, Line, Bezier, Waypoint, isclose
     
 
 class RRT(object):
