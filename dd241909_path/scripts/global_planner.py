@@ -9,17 +9,19 @@ import numpy as np
 import rospy
 import tf2_ros
 import tf2_geometry_msgs
+import actionlib
 from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped, Point
 from visualization_msgs.msg import Marker, MarkerArray
-from tf.transformations import quaternion_from_euler
+from tf.transformations import quaternion_from_euler, euler_from_quaternion
 
 from crazyflie_driver.msg import TrajectoryPolynomialPiece
 from dd241909_msgs.msg import Trajectory
+from dd241909_msgs.msg import SimpleAction, SimpleResult
 
 from geometry import Vec3, Waypoint
 from maps import create_map
-from rrt import BiRRT as RRT
+from rrt import RRT
 
 def transform_to_pose(tf):
     pose = PoseStamped()
@@ -53,11 +55,14 @@ class GlobalPlanner(object):
         rospy.init_node('global_planner', log_level=rospy.INFO)
         rospy.loginfo(rospy.get_name() + ': Initialising node...')
 
+        self.wait_rate = rospy.Rate(10)
+
         # Access ros parameters
         map_file            = rospy.get_param(rospy.get_name() + '/map_file')
         tfprefix            = rospy.get_param(rospy.get_name() + '/tfprefix')
         path_topic          = rospy.get_param(rospy.get_name() + '/path_topic')
         trajectory_topic    = rospy.get_param(rospy.get_name() + '/trajectory_topic')
+        plan_action         = rospy.get_param('~plan_action')
         self.use_rviz       = rospy.get_param(rospy.get_name() + '/use_rviz')
         self.wp_gate_dist   = rospy.get_param(rospy.get_namespace() + 'rrt/waypoint_gate_distance')
         self.wp_gate_vel    = rospy.get_param(rospy.get_namespace() + 'rrt/waypoint_gate_velocity')
@@ -74,6 +79,16 @@ class GlobalPlanner(object):
         self.tf_buff = tf2_ros.Buffer()
         self.tf_lstn = tf2_ros.TransformListener(self.tf_buff)
 
+        # Action server
+        self.plan_server = actionlib.SimpleActionServer(
+                plan_action, 
+                SimpleAction,
+                execute_cb=self.plan_cb,
+                auto_start=False
+        )
+
+        self.plan_server.start()
+
         # Parse world map
         rospy.loginfo(rospy.get_name() + ': Creating map...')
         with open(map_file, 'r') as file:
@@ -83,15 +98,23 @@ class GlobalPlanner(object):
 
         return
 
-    def start(self):
-        # TODO: Add while not shutdown loop for online replanning
+    def plan_cb(self, goal):
+
+        # Wait for map to be created
+        while not rospy.is_shutdown():
+            if hasattr(self, 'map'):
+                break
+            rospy.loginfo_throttle(5, 'Planning: Waiting for map...')
+            self.wait_rate.sleep()
 
         # Create waypoints for the planner to pass through
         waypoints = self.create_waypoints(self.map.gates)
+        start_wp = waypoints.pop(0)
 
         # Run path planning
         planner = RRT(self.map)
-        path, traj = planner.plan_path(waypoints[0], waypoints[1:])
+        #path, traj = planner.plan_path(waypoints[0], waypoints[1:])
+        path, traj = planner.plan_path(start_wp, waypoints)
 
         # Convert path of nodes to nav_msgs/Path
         nav_poses = []
@@ -119,6 +142,66 @@ class GlobalPlanner(object):
         traj_msg.header.stamp = rospy.Time.now()
         traj_msg.pieces = traj_pieces
 
+        # Add yaw trajectory based on gates
+        # NOTE: 
+        prev_yaw = (start_wp.yaw *180/math.pi) % 360
+        i = 0
+        for gate in self.map.gates:
+            wp1, wp2 = self.gate_to_waypoints(gate)
+
+            # Loop until pre-gate waypoint
+            pre_gate_pieces = []
+            time = 0
+            while True:
+                bezier = traj[i]
+                piece = traj_msg.pieces[i]
+                pre_gate_pieces.append(piece)
+                time += piece.duration.to_sec()
+                i += 1
+                
+                wp_pos = Vec3(wp1.x, wp1.y, wp1.z)
+                bz_pos = bezier.pos(-1)
+                if wp_pos == bz_pos:
+                    break
+            
+            # Calculate yawrate
+            gate_yaw = gate['heading'] % 360
+            if abs(gate_yaw - prev_yaw) <= 180:
+                yawrate = (gate_yaw - prev_yaw) / time
+            else:
+                yawrate = (360 + gate_yaw - prev_yaw) / time
+
+            # Turn yaw and yawrate into coefficients
+            t = 0
+            for piece in pre_gate_pieces:
+                piece.poly_yaw[0] = prev_yaw + t*yawrate
+                piece.poly_yaw[1] = yawrate
+                t += piece.duration.to_sec()
+
+            # Loop until post-gate waypoint
+            t = 0
+            while True:
+                bezier = traj[i]
+                piece = traj_msg.pieces[i]
+                piece.poly_yaw[0] = gate_yaw
+                t += piece.duration.to_sec()
+                i += 1
+                
+                wp_pos = Vec3(wp2.x, wp2.y, wp2.z)
+                bz_pos = bezier.pos(-1)
+                if wp_pos == bz_pos:
+                    break
+
+            prev_yaw = gate_yaw
+
+        # Set yaw values for after the last gate using escaped loop variables
+        for piece in traj_msg.pieces[i-1:]:
+            piece.poly_yaw[0] = gate_yaw
+
+        # Print for debug
+        for piece in traj_msg.pieces:
+            print('Yaws: {}'.format(piece.poly_yaw[:2]))
+
         # Publish path and trajectory
         self.path_pub.publish(path_msg)
         self.traj_pub.publish(traj_msg)
@@ -127,32 +210,37 @@ class GlobalPlanner(object):
         if self.use_rviz:
             publish_traj_to_rviz(traj_msg)
 
+        self.plan_server.set_succeeded(SimpleResult(message=''))
+
     def create_waypoints(self, gates):
         # Get start pose from tf tree
         start_pose = newPoseStamped(0, 0, 0, 0, 0, 0, self.base_frame)
         start_pose = self.tf_buff.transform(start_pose, 'map', rospy.Duration(0.2))
 
+        roll, pitch, yaw = euler_from_quaternion((
+                start_pose.pose.orientation.x,
+                start_pose.pose.orientation.y,
+                start_pose.pose.orientation.z,
+                start_pose.pose.orientation.w
+        ))
         # Start creating waypoints
         start_wp = Waypoint(
                 start_pose.pose.position.x,
                 start_pose.pose.position.y,
-                0.1, 0.0, 0.0, 0.0, 0.0
-        )
-        takeoff_wp = Waypoint(
-                start_pose.pose.position.x,
-                start_pose.pose.position.y,
-                0.4, 0.0, 0.0, 0.0, 0.0
+                start_pose.pose.position.z,
+                0.0, 0.0, 0.0, 
+                yaw
         )
 
         # Waypoints in front of and after each gate
-        waypoints = [start_wp, takeoff_wp]
+        waypoints = [start_wp]
         for gate in self.map.gates:
             before_wp, after_wp = self.gate_to_waypoints(gate)
             waypoints.extend([before_wp, after_wp])
 
         # Last waypoint 0.5 m after last gate
-        theta = self.map.gates[-1]['heading'] * 2*math.pi/360
-        normal = Vec3(math.cos(theta), math.sin(theta), 0.0)
+        yaw = self.map.gates[-1]['heading'] * math.pi/180
+        normal = Vec3(math.cos(yaw), math.sin(yaw), 0.0)
         pos = self.map.gates[-1]['position'] + 0.5*normal
         vel = self.wp_gate_vel * normal
         last_wp = Waypoint(pos.x, pos.y, pos.z, vel.x, vel.y, vel.z, 0.0)
@@ -161,8 +249,8 @@ class GlobalPlanner(object):
         return waypoints
 
     def gate_to_waypoints(self, gate):
-        theta = gate['heading'] * 2*math.pi/360
-        normal = Vec3(math.cos(theta), math.sin(theta), 0.0)
+        yaw = gate['heading'] * math.pi/180
+        normal = Vec3(math.cos(yaw), math.sin(yaw), 0.0)
 
         pos1 = gate['position'] - self.wp_gate_dist*normal
         pos2 = gate['position'] + self.wp_gate_dist*normal
@@ -260,8 +348,6 @@ def publish_traj_to_rviz(traj_msg):
 
 if __name__ == '__main__':
     planner = GlobalPlanner()
-    planner.start()
-
     rospy.spin()
 
 

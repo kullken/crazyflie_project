@@ -1,12 +1,22 @@
 <?xml version="1.0"?>
 
 <launch>
+    <arg name="trajectory_topic"        default="trajectory"/>
+    <arg name="aruco_marker_topic"      default="aruco/markers"/>
     <arg name="navigate_action"         default="navigate"/>
+    <arg name="plan_action"             default="plan"/>
+    <arg name="takeoff_action"          default="takeoff"/>
+    <arg name="rotate_action"           default="rotate"/>
     <arg name="hover_action"            default="hover"/>
     <arg name="land_action"             default="land"/>
 
     <node pkg="dd241909_miscon" type="behaviour_tree.py" name="behaviour_tree" output="screen">
+        <param name="trajectory_topic"      value="$(arg trajectory_topic)"/>
+        <param name="aruco_marker_topic"    value="$(arg aruco_marker_topic)"/>
         <param name="navigate_action"       value="$(arg navigate_action)"/>
+        <param name="plan_action"           value="$(arg plan_action)"/>
+        <param name="takeoff_action"        value="$(arg takeoff_action)"/>
+        <param name="rotate_action"         value="$(arg rotate_action)"/>
         <param name="hover_action"          value="$(arg hover_action)"/>
         <param name="land_action"           value="$(arg land_action)"/>
     </node>

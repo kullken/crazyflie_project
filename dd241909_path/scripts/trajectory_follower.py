@@ -9,11 +9,11 @@ import tf2_geometry_msgs
 import actionlib
 from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped, Pose, Twist, Point, Vector3
-from tf.transformations import quaternion_from_euler
+from tf.transformations import quaternion_from_euler, euler_from_quaternion
 from rospy.exceptions import ROSInterruptException
 from tf2_ros import ExtrapolationException
 
-from crazyflie_driver.msg import FullState
+from crazyflie_driver.msg import FullState, Position
 from crazyflie_driver.srv import Stop
 
 from dd241909_msgs.msg import Trajectory
@@ -34,12 +34,14 @@ class TrajectoryFollower(object):
 
         # Access ros parameters
         tfprefix            = rospy.get_param(rospy.get_name() + '/tfprefix')
-        goal_topic          = rospy.get_param(rospy.get_name() + '/navgoal_topic')
         path_topic          = rospy.get_param(rospy.get_name() + '/path_topic')
         trajectory_topic    = rospy.get_param(rospy.get_name() + '/trajectory_topic')
+        cmdpos_topic        = rospy.get_param(rospy.get_name() + '/cmdpos_topic')
         cmdfull_topic       = rospy.get_param(rospy.get_name() + '/cmdfull_topic')
         stop_srv_name       = rospy.get_param(rospy.get_name() + '/stop_srv_name')
         navigate_action     = rospy.get_param(rospy.get_name() + '/navigate_action')
+        takeoff_action      = rospy.get_param('~takeoff_action')
+        rotate_action       = rospy.get_param('~rotate_action')
         hover_action        = rospy.get_param(rospy.get_name() + '/hover_action')
         land_action         = rospy.get_param(rospy.get_name() + '/land_action')
 
@@ -48,16 +50,19 @@ class TrajectoryFollower(object):
         self.path_sub = rospy.Subscriber(path_topic, Path, self.path_cb)
         self.traj = None
         self.traj_sub = rospy.Subscriber(trajectory_topic, Trajectory, self.traj_cb)
+        # self.has_seen_marker = False
+        # self.seen_marker_sub = rospy.Subscriber('aruco/result', Trajectory, self.traj_cb)
 
         # Publishers
-        self.goal_pub = rospy.Publisher(goal_topic, PoseStamped, queue_size=1)
+        self.cmdpos_pub = rospy.Publisher(cmdpos_topic, Position, queue_size=1)
         self.cmdfull_pub = rospy.Publisher(cmdfull_topic, FullState, queue_size=1)
 
         # Set up tf stuff
+        self.base_frame = 'base_link'
+        self.odom_frame = 'odom'
         if tfprefix:
-            self.base_frame = tfprefix + '/base_link'
-        else:
-            self.base_frame = 'base_link'
+            self.base_frame = tfprefix + '/' + self.base_frame
+            self.odom_frame = tfprefix + '/' + self.odom_frame
         self.tf_buff = tf2_ros.Buffer()
         self.tf_lstn = tf2_ros.TransformListener(self.tf_buff)
 
@@ -71,6 +76,18 @@ class TrajectoryFollower(object):
                 NavigateAction, 
                 #execute_cb=self.navigate_path_cb,
                 execute_cb=self.navigate_traj_cb,
+                auto_start=False
+        )
+        self.takeoff_server = actionlib.SimpleActionServer(
+                takeoff_action, 
+                SimpleAction, 
+                execute_cb=self.takeoff_cb,
+                auto_start=False
+        )
+        self.rotate_server = actionlib.SimpleActionServer(
+                rotate_action, 
+                SimpleAction, 
+                execute_cb=self.rotate_cb,
                 auto_start=False
         )
         self.hover_server = actionlib.SimpleActionServer(
@@ -89,6 +106,10 @@ class TrajectoryFollower(object):
         # Start action servers
         rospy.loginfo(rospy.get_name() + ': Starting {} action server...'.format(navigate_action))
         self.nav_server.start()
+        rospy.loginfo(rospy.get_name() + ': Starting {} action server...'.format(takeoff_action))
+        self.takeoff_server.start()
+        rospy.loginfo(rospy.get_name() + ': Starting {} action server...'.format(rotate_action))
+        self.rotate_server.start()
         rospy.loginfo(rospy.get_name() + ': Starting {} action server...'.format(hover_action))
         self.hover_server.start()
         rospy.loginfo(rospy.get_name() + ': Starting {} action server...'.format(land_action))
@@ -114,15 +135,15 @@ class TrajectoryFollower(object):
                 current_pose = self.get_base_pose()
                 while pose_dist(target.pose, current_pose.pose) >= self.tol:
                     target.header.stamp = rospy.Time.now()
-                    self.goal_pub.publish(target)
+                    self.cmdpos_pub.publish(target)
                     current_pose = self.get_base_pose()
                     # TODO: Check preemption
                     self.cmd_rate.sleep()
 
             rospy.loginfo(rospy.get_name() + ': Path Completed!')
-            self.nav_server.set_succeeded(NavigateResult(success=True))
+            self.nav_server.set_succeeded(NavigateResult(message=''))
         except ROSInterruptException:
-            self.nav_server.set_aborted(NavigateResult(success=False))
+            self.nav_server.set_aborted(NavigateResult(message=''))
 
     def navigate_traj_cb(self, goal):
         try:
@@ -168,7 +189,8 @@ class TrajectoryFollower(object):
 
                 t = rospy.Time.now() - t0 - passed_t # For first comparision
                 while t <= piece.duration:
-                    t = rospy.Time.now() - t0 - passed_t
+                    t_now = rospy.Time.now()
+                    t = t_now - t0 - passed_t
                     tsec = t.to_sec()
                     tv = np.power([tsec]*nrterms, range(nrterms))
                     posyaw = np.dot(C_pos, tv)
@@ -177,8 +199,12 @@ class TrajectoryFollower(object):
 
                     msg = FullState()
                     msg.header.frame_id = self.traj.header.frame_id
+                    msg.header.stamp = t_now
+                    yaw = posyaw[3] % 360
                     msg.pose  = newPose(posyaw[0], posyaw[1], posyaw[2], 0.0, 0.0, posyaw[3])
                     msg.twist = newTwist(velyaw[0], velyaw[1], velyaw[2], 0.0, 0.0, velyaw[3])
+                    msg.pose  = newPose(posyaw[0], posyaw[1], posyaw[2], yaw, yaw, yaw)
+                    msg.twist = newTwist(velyaw[0], velyaw[1], velyaw[2], velyaw[3], velyaw[3], velyaw[3])
                     msg.acc   = Vector3(accyaw[0], accyaw[1], accyaw[2])
 
                     self.cmdfull_pub.publish(msg)
@@ -188,63 +214,128 @@ class TrajectoryFollower(object):
                 passed_t += piece.duration
 
             rospy.loginfo(rospy.get_name() + ': Trajectory completed!')
-            self.nav_server.set_succeeded(NavigateResult(success=True))
+            self.nav_server.set_succeeded(NavigateResult(message=''))
         except ROSInterruptException:
-            self.nav_server.set_aborted(NavigateResult(success=False))
+            self.nav_server.set_aborted(NavigateResult(message=''))
+
+    def takeoff_cb(self, goal):
+        try:
+            rospy.loginfo(rospy.get_name() + ': Takeoff!')
+            target_pose = self.get_base_pose(frame_id=self.odom_frame)
+            msg = cfposition_from_pose(target_pose)
+            msg.z = 0.4
+
+            while not rospy.is_shutdown():
+                msg.header.stamp = rospy.Time.now()
+                self.cmdpos_pub.publish(msg)
+
+                # TODO: Check preemption
+
+                dist = pose_dist(target_pose.pose, self.get_base_pose(frame_id=self.odom_frame).pose)
+                if dist < 0.05:
+                    self.takeoff_server.set_succeeded(SimpleResult(message=''))
+                    return
+                else:
+                    rospy.loginfo_throttle(1, 'Takeoff: dist = {}'.format(round(dist, 4)))
+                self.cmd_rate.sleep()
+                
+                
+        except ROSInterruptException:
+            self.takeoff_server.set_aborted(SimpleResult(message=''))
+
+    def rotate_cb(self, goal):
+        try:
+            rospy.loginfo(rospy.get_name() + ': Start rotate!')
+            target_pose = self.get_base_pose(frame_id=self.odom_frame)
+            msg = cfposition_from_pose(target_pose)
+            msg.z = 0.4
+
+            while not rospy.is_shutdown():
+                rospy.loginfo_throttle(5, 'Rotating...')
+                
+                msg.header.stamp = rospy.Time.now()
+                self.cmdpos_pub.publish(msg)
+
+                msg.yaw += 0.5
+                if msg.yaw >= 360.0:
+                    msg.yaw -= 360.0
+
+                if self.rotate_server.is_preempt_requested():
+                    rospy.loginfo(rospy.get_name() + ': Rotate preempted!')
+                    self.rotate_server.set_preempted(SimpleResult(message=''))
+                    return
+
+                self.cmd_rate.sleep()
+                
+        except ROSInterruptException:
+            self.rotate_server.set_aborted(SimpleResult(message=''))
 
     def hover_cb(self, goal):
         try:
             rospy.loginfo(rospy.get_name() + ': Hovering...')
-            target = self.get_base_pose()
-            if target.pose.position.z < 0.2:
-                target.pose.position.z = 0.2
+            target_pose = self.get_base_pose()
+            msg = cfposition_from_pose(target_pose)
+            
+            msg.z = max(msg.z, 0.4)
+
+            rospy.loginfo(rospy.get_name() + ': ... at ({}, {}, {}, {})'.format(msg.x, msg.y, msg.z, msg.yaw))
 
             while not rospy.is_shutdown():
-                target.header.stamp = rospy.Time.now()
-                self.goal_pub.publish(target)
-                # TODO: Check preemption
+                rospy.loginfo_throttle(10, rospy.get_name() + ': Hovering...')
+
+                msg.header.stamp = rospy.Time.now()
+                self.cmdpos_pub.publish(msg)
+
+                if self.hover_server.is_preempt_requested():
+                    rospy.loginfo(rospy.get_name() + ': Hover preempted!')
+                    self.hover_server.set_preempted(SimpleResult(message=''))
+                    return
+                
                 self.cmd_rate.sleep()
                 
         except ROSInterruptException:
-            self.hover_server.set_aborted(SimpleResult(success=False))
+            self.hover_server.set_aborted(SimpleResult(message=''))
 
     def land_cb(self, goal):
         try:
             rospy.loginfo(rospy.get_name() + ': Landing...')
             current_pose = self.get_base_pose()
-            target = current_pose
+            msg = cfposition_from_pose(current_pose)
 
             while not rospy.is_shutdown() and current_pose.pose.position.z > 0.1:
                 current_pose = self.get_base_pose()
                 z_error = current_pose.pose.position.z - 0.1
                 if abs(z_error) < 0.05:
-                    target.pose.position.z = 0.1
+                    msg.z = 0.1
                 else:
-                    target.pose.position.z = current_pose.pose.position.z - math.copysign(0.05, z_error)
+                    msg.z = current_pose.pose.position.z - math.copysign(0.05, z_error)
 
-                target.header.stamp = rospy.Time.now()
-                self.goal_pub.publish(target)
-                # TODO: Check preemption
+                msg.header.stamp = rospy.Time.now()
+                self.cmdpos_pub.publish(msg)
+                
+                if self.land_server.is_preempt_requested():
+                    rospy.loginfo(rospy.get_name() + ': Land preempted!')
+                    self.land_server.set_preempted(SimpleResult(message=''))
+                    return
+
                 self.cmd_rate.sleep()
 
             rospy.loginfo(rospy.get_name() + ': Calling stop service...')
             self.stop_srv(0)
             rospy.loginfo(rospy.get_name() + ': Landing completed.')
 
-            self.land_server.set_succeeded(SimpleResult(success=True))
+            self.land_server.set_succeeded(SimpleResult(message=''))
         except ROSInterruptException:
-            self.land_server.set_aborted(NavigateResult(success=False))
+            self.land_server.set_aborted(NavigateResult(message=''))
 
-    def get_base_pose(self):
+    def get_base_pose(self, frame_id='map'):
         current_pose = newPoseStamped(0, 0, 0, 0, 0, 0, self.base_frame)
-        rate = rospy.Rate(20)   # 20 Hz, maximum rate of while loop
         while not rospy.is_shutdown():
             try:
-                return self.tf_buff.transform(current_pose, 'map', rospy.Duration(0.05))
+                return self.tf_buff.transform(current_pose, frame_id, rospy.Duration(0.05))
             except ExtrapolationException:
-                rospy.logwarn_throttle(1.0, rospy.get_name() + ': Cannot transform from {} to map'.format(self.base_frame))
-                rate.sleep()
-
+                rospy.logwarn_throttle(1.0, rospy.get_name() + ': Cannot transform from {} to {}'.format(self.base_frame, frame_id))
+                self.wait_rate.sleep()
 
 
 
@@ -282,6 +373,27 @@ def newTwist(x, y, z, roll, pitch, yaw):
     twist.angular.y = pitch
     twist.angular.z = yaw
     return twist
+
+def cfposition_from_pose(pose):
+    # Convert to crazyflie position msg (x,y,z,yaw)
+    roll, pitch, yaw = euler_from_quaternion((
+            pose.pose.orientation.x,
+            pose.pose.orientation.y,
+            pose.pose.orientation.z,
+            pose.pose.orientation.w
+    ))
+    # NOTE Yaw is in degrees.
+    position = Position(
+            pose.header,
+            pose.pose.position.x,
+            pose.pose.position.y,
+            pose.pose.position.z,
+            yaw*180.0/math.pi
+    )
+
+    return position
+
+
 
 def point_dist(p1, p2):
     return math.sqrt((p1.x-p2.x)**2 + (p1.y-p2.y)**2 + (p1.z-p2.z)**2)

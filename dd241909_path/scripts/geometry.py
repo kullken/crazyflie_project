@@ -51,8 +51,6 @@ class Bezier(object):
             for i in range(len(self.points)-1):
                 newpoint = self.degree/self.T * (self.points[i+1] - self.points[i])
                 newpoints.append(newpoint)
-            if not newpoints:
-                print(self)
             self._derivative = Bezier(newpoints, self.T)
         return self._derivative
 
@@ -63,7 +61,7 @@ class Bezier(object):
         return self._coeffs
     
     def reversed(self):
-        return Bezier([reversed(self.points)], self.T)
+        return Bezier(self.points[::-1], self.T)
 
     def pos(self, t):
         if t == 0:
@@ -108,6 +106,7 @@ class Bezier(object):
                 split(newpoints, t)
 
         split(self.points, t)
+        upper.reverse()
 
         return Bezier(lower, t*self.T), Bezier(upper, (1-t)*self.T)
 
@@ -133,6 +132,15 @@ class Bezier(object):
 
     @staticmethod
     def calc_coeffs(points, T, degree):
+        if degree == 5:
+            p0, p1, p2, p3, p4, p5 = points
+            c0 = p0
+            c1 = 5/T * (p1 - p0)
+            c2 = 10/T**2 * (p2 - 2*p1 + p0)
+            c3 = 10/T**3 * (p3 - 3*p2 + 3*p1 - p0)
+            c4 = 5/T**4 * (p4 - 4*p3 + 6*p2 - 4*p1 + p0)
+            c5 = 1/T**5 * (p5 - 5*p4 + 10*p3 - 10*p2 + 5*p1 - p0)
+            return [c0, c1, c2, c3, c4, c5]
         if degree == 4:
             p0, p1, p2, p3, p4 = points
             c0 = p0
@@ -215,16 +223,6 @@ class Vec3(object):
 
     def __len__(self):
         return 3
-
-    def __getitem__(self, key):
-        if key == 0:
-            return self._x
-        elif key == 1:
-            return self._y
-        elif key == 2:
-            return self._z
-        else:
-            raise IndexError()
 
     def __eq__(self, other):
         #return self._x == other._x and self._y == other._y and self._z == other._z

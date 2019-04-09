@@ -14,353 +14,12 @@ from geometry import Vec3, Line, Bezier, Waypoint, isclose
 
 from myprofiling import profile
 
+    
 
 class RRT(object):
 
     _seed = np.random.randint(1000, 9999)
-    _seed = 4865
-
-    def __init__(self, map):
-        self.map = map
-        
-        rospy.loginfo('RRT: Initialising with random seed {}'.format(self._seed))
-        np.random.seed(self._seed)
-
-        # Access rrt ros parameters
-        self.iterations         = rospy.get_param(rospy.get_namespace() + 'rrt/iterations')
-        self.goal_sample_prob   = rospy.get_param(rospy.get_namespace() + 'rrt/goal_sample_prob')
-        #self.max_step_len       = rospy.get_param(rospy.get_namespace() + 'rrt/max_step_length')
-        self.min_step_time      = rospy.get_param(rospy.get_namespace() + 'rrt/min_step_time')
-        self.max_step_time      = rospy.get_param(rospy.get_namespace() + 'rrt/max_step_time')
-        self.wp_pos_tol         = rospy.get_param(rospy.get_namespace() + 'rrt/waypoint_position_tolerance')
-        self.wp_vel_tol         = rospy.get_param(rospy.get_namespace() + 'rrt/waypoint_velocity_tolerance')
-        self.vel_max            = rospy.get_param(rospy.get_namespace() + 'crazyflie/vel_max')
-        self.acc_max            = rospy.get_param(rospy.get_namespace() + 'crazyflie/acc_max')
-
-    def plan_path(self, start_wp, waypoints):
-        # Statistics variables
-        self.collision_dismissals = 0
-        self.vel_dismissals = 0
-        self.acc_dismissals = 0
-        
-        startnode = self.wp_to_node(start_wp)
-        startnode.parent = None
-        startnode.parent_traj = Bezier([startnode.pos]*5, 1)
-        startnode.cost = 0.0
-        
-        for wp in waypoints:
-            goalnode = self.wp_to_node(wp)
-            finalnode = self.plan_single_path(startnode, goalnode)
-            # If planning fails, then fly what we got
-            if not finalnode:
-                finalnode = startnode
-                break
-            startnode = finalnode
-        tot_path, tot_traj, tot_cost = self.retrace_path(finalnode)
-
-        rospy.loginfo('RRT: Total path cost: {}'.format(tot_cost))
-        rospy.loginfo('RRT: Collision dismissals: {}'.format(self.collision_dismissals))
-        rospy.loginfo('RRT: Velocity dismissals: {}'.format(self.vel_dismissals))
-        rospy.loginfo('RRT: Accelaration dismissals: {}'.format(self.acc_dismissals))
-
-        # for bezier in tot_traj:
-        #     rospy.loginfo('RRT: points: {}'.format(bezier.points))
-
-        return tot_path, tot_traj
-
-    def plan_single_path(self, startnode, goalnode):
-        self.first_sample = True
-        
-        tree = RRTTree(startnode)
-
-        #print('RRT: startpos = {}, startvel = {}'.format(startnode.pos, startnode.vel))
-        #print('RRT: goalpos = {}, goalvel = {}'.format(goalnode.pos, goalnode.vel))
-
-        for iter in xrange(1, self.iterations+1):
-
-            rospy.loginfo_throttle(1, 'RRT: Iteration {}'.format(iter))
-
-            randnode = self.sample_node(goalnode)
-            nearnode = tree.find_nearest(randnode)
-            newnodes = self.steer_bezier(nearnode, randnode)
-            if len(newnodes) == 0:
-                continue
-
-            #print('RRT: randpos = {}, randvel = {}'.format(randnode.pos, randnode.vel))
-
-            tree.add(newnodes)
-            tree.rewire(newnodes, self.map)
-
-            finalnode = self.reached_goal(newnodes, goalnode)
-            if not finalnode is None:
-                rospy.loginfo('RRT: Goal reached!')
-                rospy.loginfo('RRT: {} total iterations'.format(iter))
-                rospy.loginfo('RRT: {} nodes in tree'.format(len(tree)))
-                return finalnode
-        
-        rospy.logwarn('RRT: Failed!')
-        rospy.loginfo('RRT: {} total iterations'.format(iter))
-        rospy.loginfo('RRT: {} nodes in tree'.format(len(tree)))
-
-        publish_tree_to_rviz(tree)
-
-        return 
-
-    def sample_node(self, goal):
-        # Always sample goal first time
-        if self.first_sample:
-            self.first_sample = False
-            return goal
-        elif np.random.rand() < self.goal_sample_prob:
-            return goal
-        else:
-            # Sample position
-            rand = np.random.rand(3)
-            min = np.array(self.map.min)
-            max = np.array(self.map.max)
-            pos = Vec3(*(rand*max + (1-rand)*min))
-            while self.map.query([pos]):
-                rand = np.random.rand(3)
-                min = np.array(self.map.min)
-                max = np.array(self.map.max)
-                pos = Vec3(*(rand*max + (1-rand)*min))
-
-            # Sample velocity
-            vel = Vec3(*(np.random.rand(3)))
-            while abs(vel) > 1:
-                vel = Vec3(*(np.random.rand(3)))
-            vel *= self.vel_max
-            
-            # "Sample" yaw
-            #yaw = np.random.rand() * 2*math.pi
-            yaw = 0.0
-
-            return RRTNode(pos, vel, yaw)
-
-    def steer(self, parentnode, targetnode):
-        start = parentnode.pos
-        diff = targetnode.pos - start
-        dist = abs(diff)
-        direction = diff / dist
-        step_len = min(dist, self.max_step_len)
-        stop = start + direction * step_len
-
-        line = Line(start, stop)
-        if self.map.query(line):
-            return []
-
-        newnode = RRTNode(stop, targetnode.yaw)
-        newnode.parent = parentnode
-        newnode.cost = parentnode.cost + self.cost(parentnode, newnode)
-        return [newnode]
-
-    def steer_bezier(self, parentnode, targetnode):
-
-        # Ensure target node is at most vel_max * max_step_time away
-        diff = targetnode.pos - parentnode.pos
-        dist = abs(diff)
-        direction = diff / dist
-        #step_len = min(dist, self.vel_max * self.max_step_time)
-        step_len = min(dist, 1)
-        stop = parentnode.pos + direction * step_len
-        if self.map.query([stop]):
-            return []
-        targetnode = RRTNode(stop, targetnode.vel, targetnode.yaw)
-
-        for T in np.linspace(self.min_step_time, self.max_step_time, num=11):
-            bezier = newQuarticBezier(parentnode, targetnode, T)
-            if self.check_bezier(bezier):
-                targetnode.parent = parentnode
-                targetnode.parent_traj = bezier
-                targetnode.cost = parentnode.cost + self.cost_bezier(parentnode, targetnode)
-                return [targetnode]
-        
-        return []
-
-    def steer_bezier_stepwise(self, parentnode, targetnode):
-
-        # Ensure target node is at most vel_max * max_step_time away
-        diff = targetnode.pos - parentnode.pos
-        dist = abs(diff)
-        direction = diff / dist
-        step_len = min(dist, self.vel_max * self.max_step_time)
-        stop = parentnode.pos + direction * step_len
-        targetnode = RRTNode(stop, targetnode.vel, targetnode.yaw)
-
-        for T in np.linspace(self.min_step_time, self.max_step_time, num=5):
-            bezier = newQuarticBezier(parentnode, targetnode, T)
-            lower_bezier, bezier = bezier.split(self.min_step_time)
-
-            newnodes = []
-            
-            while self.check_bezier(lower_bezier):
-                newnode = RRTNode(lower_bezier.pos(lower_bezier.T), 
-                                  lower_bezier.vel(lower_bezier.T), 
-                                  targetnode.yaw)
-                newnode.parent = parentnode
-                newnode.parent_traj = lower_bezier
-                newnode.cost = parentnode.cost + self.cost_bezier(parentnode, newnode)
-                newnodes.append(newnode)
-
-                if bezier.T > 0:
-                    lower_bezier, bezier = bezier.split(min(self.min_step_time, bezier.T))
-                else:
-                    break
-            
-            if len(newnodes) > 1:
-                print('RRT.steer(): {} nodes added at once.'.format(len(newnodes)))
-
-            if len(newnodes) > 0:
-                return newnodes
-
-
-        return []
-
-    def steer_bezier_binary(self, parentnode, targetnode):
-
-        # Ensure target node is at most vel_max * max_step_time away
-        diff = targetnode.pos - parentnode.pos
-        dist = abs(diff)
-        direction = diff / dist
-        step_len = min(dist, self.vel_max * self.max_step_time / 10)
-        stop = parentnode.pos + direction * step_len
-        targetnode = RRTNode(stop, targetnode.yaw)
-
-        # If kd-constraints are broken at max T, then it is not working anyway
-        max_bezier = newQuarticBezier(parentnode, targetnode, self.max_step_time)
-        if not self.check_kd_bezier(max_bezier):
-            return []
-
-        # If min is ok, then we are happy
-        min_bezier = newQuarticBezier(parentnode, targetnode, self.min_step_time)
-        if self.check_bezier(min_bezier):
-            targetnode.parent = parentnode
-            targetnode.parent_traj = min_bezier
-            targetnode.cost = parentnode.cost + self.cost_bezier(parentnode, targetnode)
-            return [targetnode]
-
-        # Binary search for kinda optimal T
-        T = self.binary_search(self.min_step_time, 
-                               self.max_step_time, 
-                               parentnode, 
-                               targetnode)
-
-        bezier = newQuarticBezier(parentnode, targetnode, T)
-        targetnode.parent = parentnode
-        targetnode.parent_traj = bezier
-        targetnode.cost = parentnode.cost + self.cost_bezier(parentnode, targetnode)
-        return [targetnode]
-
-    def binary_search(self, min, max, parentnode, targetnode, tol=0.1):
-
-        # Stop condition
-        if max - min <= tol:
-            return max
-        
-        # Recursive searching
-        mid = (max + min) / 2
-        bezier = newQuarticBezier(parentnode, targetnode, mid)
-        if self.check_bezier(bezier):
-            return self.binary_search(min, mid, parentnode, targetnode, tol)
-        else:
-            return self.binary_search(mid, max, parentnode, targetnode, tol)
-
-    def check_bezier(self, bezier):
-        """Check whether bezier curve obey geometric and kino-dynamic constraints."""
-
-        # Collision
-        if self.map.query(bezier):
-            self.collision_dismissals += 1
-            return False
-        
-        # Kino-dynamic
-        return self.check_kd_bezier(bezier)
-
-    def check_kd_bezier(self, bezier):
-        """Check whether bezier curve obey kino-dynamic constraints."""
-
-        # max_vel = max(abs(bezier.vel(t)) for t in np.linspace(0, bezier.T, 51))
-        # max_acc = max(abs(bezier.acc(t)) for t in np.linspace(0, bezier.T, 51))
-        # rospy.loginfo_throttle(1, 'RRT: bezier max vel = {}'.format(max_vel))
-        # rospy.loginfo_throttle(1, 'RRT: bezier max acc = {}'.format(max_acc))
-        
-        for t in np.linspace(0, bezier.T, 21):
-            # Velocity constraints
-            if abs(bezier.vel(t)) > self.vel_max:
-                self.vel_dismissals += 1
-                return False
-            # Acceleration constraints
-            if abs(bezier.acc(t)) > self.acc_max:
-                self.acc_dismissals += 1
-                return False
-
-        return True
-
-    def reached_goal(self, nodes, goal):
-        bestnode = None
-        bestdist = float('inf')
-        for node in nodes:
-            posdist = abs(node.pos - goal.pos)
-            veldist = abs(node.vel - goal.vel)
-            # print('RRT.reached_goal(): posdist = {}, veldist = {}'.format(round(posdist, 5), round(veldist, 5)))
-            # print('RRT.reached_goal(): node.pos = {}, node.vel = {}'.format(node.pos, node.vel))
-            # print('RRT.reached_goal(): goal.pos = {}, goal.vel = {}'.format(goal.pos, goal.vel))
-            if posdist <= self.wp_pos_tol and veldist <= self.wp_vel_tol:
-                if posdist + veldist < bestdist:
-                    bestdist = posdist + veldist
-                    bestnode = node
-
-        return bestnode
-
-    def retrace_path(self, node):
-        cost = node.cost
-        Waypoint = namedtuple('Waypoint', ('x', 'y', 'z', 'yaw'))
-        path = []
-        traj = []
-        while not node is None:
-            path.append(Waypoint(node.pos.x, node.pos.y, node.pos.z, node.yaw))
-            traj.append(node.parent_traj)
-            node = node.parent
-        path.reverse()
-        traj.reverse()
-        return path, traj, cost
-
-    def path_to_traj(self, path):
-        start = path[0]
-        prev_p3 = Vec3(start.x, start.y, start.z)
-        prev_p2 = prev_p3
-        prev_p1 = prev_p3
-        prev_T = 5
-        beziers = []
-        for next_wp in path[1:]:
-            T = 5
-            p0 = prev_p3
-            p1 = (T/prev_T) * (prev_p3 - prev_p2) + p0
-            p2 = (T/prev_T)**2 * (prev_p1 - 2*prev_p2 + prev_p3) + 2*p1 - p0
-            p3 = Vec3(next_wp.x, next_wp.y, next_wp.z)
-            beziers.append(QuarticBezier([p0, p1, p2, p3], T))
-            prev_p1 = p1
-            prev_p2 = p2
-            prev_p3 = p3
-            prev_T = T
-        return beziers
-
-    def wp_to_node(self, wp):
-        return RRTNode(Vec3(wp.x, wp.y, wp.z), Vec3(wp.vx, wp.vy, wp.vz), wp.yaw)
-
-    @staticmethod
-    def cost(startnode, endnode):
-        return abs(endnode.pos - startnode.pos)
-    
-    @staticmethod
-    def cost_bezier(startnode, endnode):
-        return endnode.parent_traj.T
-    
-    
-class BiRRT(object):
-
-    _seed = np.random.randint(1000, 9999)
-    #_seed = 6176
+    _seed = 6176
 
     def __init__(self, map):
         self.map = map
@@ -372,7 +31,7 @@ class BiRRT(object):
         self.iterations         = rospy.get_param(rospy.get_namespace() + 'rrt/iterations')
         self.goal_sample_prob   = rospy.get_param(rospy.get_namespace() + 'rrt/goal_sample_prob')
         self.connect_trees_prob = rospy.get_param(rospy.get_namespace() + 'rrt/connect_trees_prob')
-        #self.max_step_len       = rospy.get_param(rospy.get_namespace() + 'rrt/max_step_length')
+        self.max_step_len       = rospy.get_param(rospy.get_namespace() + 'rrt/max_step_length')
         self.min_step_time      = rospy.get_param(rospy.get_namespace() + 'rrt/min_step_time')
         self.max_step_time      = rospy.get_param(rospy.get_namespace() + 'rrt/max_step_time')
         self.wp_pos_tol         = rospy.get_param(rospy.get_namespace() + 'rrt/waypoint_position_tolerance')
@@ -395,6 +54,7 @@ class BiRRT(object):
             if not finalnode:
                 finalnode = startnode
                 break
+            
             wp_nodes.append(finalnode)
             startnode = finalnode
         #tot_path, tot_traj, tot_cost = self.retrace_path(finalnode)
@@ -506,13 +166,12 @@ class BiRRT(object):
         # Change distance of target 
         diff = targetnode.pos - connectnode.pos
         dist = abs(diff)
-        direction = diff / dist
-        #step_len = min(dist, self.vel_max * self.max_step_time)
-        step_len = min(dist, 1)
-        stop = connectnode.pos + direction * step_len
-        if self.map.query([stop]):
-            return
-        targetnode = RRTNode(stop, targetnode.vel, targetnode.yaw)
+        if dist > self.max_step_len:
+            direction = diff / dist
+            pos = connectnode.pos + self.max_step_len * direction
+            if self.map.query([pos]):
+                return
+            targetnode = RRTNode(pos, targetnode.vel, targetnode.yaw)
 
         for T in np.linspace(self.min_step_time, self.max_step_time, num=11):
             if reverse:
@@ -526,7 +185,7 @@ class BiRRT(object):
                         T
                 )
                 if self.check_bezier(bezier):
-                    RRTNode.link_nodes(targetnode, connectnode, bezier)
+                    targetnode.set_next_link(connectnode, bezier)
                     return targetnode
             else:
                 bezier = Bezier.newPenticBezier(
@@ -539,7 +198,7 @@ class BiRRT(object):
                         T
                 )
                 if self.check_bezier(bezier):
-                    RRTNode.link_nodes(connectnode, targetnode, bezier)
+                    targetnode.set_prev_link(connectnode, bezier)
                     return targetnode
         
         return
@@ -557,12 +216,6 @@ class BiRRT(object):
 
     def check_kd_bezier(self, bezier):
         """Check whether bezier curve obey kino-dynamic constraints."""
-
-        # max_vel = max(abs(bezier.vel(t)) for t in np.linspace(0, bezier.T, 51))
-        # max_acc = max(abs(bezier.acc(t)) for t in np.linspace(0, bezier.T, 51))
-        # rospy.loginfo_throttle(1, 'RRT: bezier max vel = {}'.format(max_vel))
-        # rospy.loginfo_throttle(1, 'RRT: bezier max acc = {}'.format(max_acc))
-        
         for t in np.linspace(0, bezier.T, 21):
             # Velocity constraints
             if abs(bezier.vel(t)) > self.vel_max:
@@ -639,55 +292,56 @@ class BiRRT(object):
             
             nodes.append(startnode)
             nodes.reverse()
+
+            # Manually set costs correctly, should not be needed but it is :-(
+            for node in nodes[1:]:
+                node.cost = node.prev_node.cost + node.prev_traj.T
             return nodes
         
         nodes = get_nodes(startnode, endnode)
-        
-        # Pair-wise optimisation (Should this be done? Equivalent principle as in steer. Higher order perhaps?)
-        pre_cost = endnode.cost
-        for node1, node2 in zip(nodes[:-1], nodes[1:]):
-            current_T = node2.cost - node1.cost
-            assert isclose(current_T, node2.prev_traj.T)
-            best_bezier = None
 
-            for T in np.linspace(current_T, current_T/2, 5)[1:]:
-                bezier = Bezier.newPenticBezier(node1.pos, node1.vel, node1.acc, node2.pos, node2.vel, node2.acc, T)
-                if self.check_bezier(bezier):
-                    best_bezier = bezier
-            
-            if not best_bezier is None:
-                RRTNode.link_nodes(node1, node2, best_bezier)
+        # Iteratively skip k node(s) at a time optimisation
+        cost = nodes[-1].cost
+        should_split = True
+        while True:
+            for k in range(3, 0, -1):
+                for start_i in range(k+1):
+                    nodes = get_nodes(startnode, endnode, split=should_split)
+                    should_split = False
 
-        post_cost = endnode.cost
-        print('RRT: Pairwise saved {} seconds'.format(round(pre_cost - post_cost, 4)))
+                    i = start_i
+                    while i < len(nodes) - (k+1):
+                        node1 = nodes[i]
+                        node2 = nodes[i+(k+1)]
 
-        # Iteratively skip one node optimisation
-        node_skipped = True
-        while node_skipped:
-            node_skipped = False
-            for start_i in (0, 1):
-                nodes = get_nodes(startnode, endnode, split=False)
+                        #current_T = node2.cost - node1.cost
+                        current_T = 0
+                        node = node2
+                        for _ in range(k+1):
+                            current_T += node.prev_traj.T
+                            node = node.prev_node
 
-                i = start_i
-                while i < len(nodes) - 2:
-                    node1 = nodes[i]
-                    node2 = nodes[i+2]
+                        best_bezier = None
 
-                    current_T = node2.cost - node1.cost
-                    best_bezier = None
+                        for T in np.linspace(current_T, current_T/8, 7)[1:]:
+                            bezier = Bezier.newPenticBezier(node1.pos, node1.vel, node1.acc, node2.pos, node2.vel, node2.acc, T)
+                            if self.check_bezier(bezier):
+                                best_bezier = bezier
+                        
+                        if best_bezier is None:
+                            i += 1
+                        else:
+                            RRTNode.link_nodes(node1, node2, best_bezier)
+                            #print('Skipped node! dT = {}'.format(round(current_T - T, 4)))
+                            #node_skipped = True
+                            i += 2
 
-                    for T in np.linspace(current_T, current_T/8, 11)[1:]:
-                        bezier = Bezier.newPenticBezier(node1.pos, node1.vel, node1.acc, node2.pos, node2.vel, node2.acc, T)
-                        if self.check_bezier(bezier):
-                            best_bezier = bezier
-                    
-                    if best_bezier is None:
-                        i += 1
-                    else:
-                        RRTNode.link_nodes(node1, node2, best_bezier)
-                        print('Skipped node! dT = {}'.format(round(current_T - T, 4)))
-                        node_skipped = True
-                        i += 2
+            improvement = cost - nodes[-1].cost
+            print('Improvement: {} sec'.format(round(improvement, 4)))
+            if improvement <= 0:
+                break
+            cost = nodes[-1].cost
+            should_split = True
 
         return
 
@@ -702,10 +356,23 @@ class BiRRT(object):
         else:
             RRTNode.link_nodes(backwards_node, forwards_node.next_node, forwards_node.next_traj)
 
-            # Iterate forward until end if chain
+            # Iterate forward until end of chain
             node = backwards_node
             while not node.next_node is None:
+                # if node.next_node.prev_node != node:
+                #     print(node.next_node.prev_node is node)
+                #     print('DEBUG: Incorrect connection!')
+                #     print('DEBUG: node: {}'.format(node))
+                #     print('DEBUG: next: {}'.format(node.next_node))
+                #     print('DEBUG: nxpr: {}'.format(node.next_node.prev_node))
+                RRTNode.link_nodes(node, node.next_node, node.next_traj)
                 node = node.next_node
+
+            ### DEBUG: Check that we have a backwards chain ###
+            testnode = node
+            while not testnode is None:
+                testnode = testnode.prev_node
+            ### END DEBUG ###
 
             return node
 
@@ -722,7 +389,8 @@ class BiRRT(object):
         bezier = Bezier([p0, p1, p2], T)
 
         startnode = RRTNode(pos, vel, wp.yaw)
-        startnode.set_prev_link(None, bezier)
+        startnode.set_prev_link(None, bezier, update_cost=False)
+        startnode.cost = 0
 
         return startnode
 
@@ -739,7 +407,8 @@ class BiRRT(object):
         bezier = Bezier([p0, p1, p2], T)
 
         goalnode = RRTNode(pos, vel, wp.yaw)
-        goalnode.set_next_link(None, bezier)
+        goalnode.set_next_link(None, bezier, update_cost=False)
+        goalnode.cost_to_goal = 0
 
         return goalnode
 
@@ -747,8 +416,9 @@ class BiRRT(object):
 
 class RRTTree(object):
 
-    def __init__(self, root):
+    def __init__(self, root, id=''):
         self.root = root
+        self.id = id
         self.node_storage = NearestNeighbourGrid([root], bin_size=0.5)
 
     def __len__(self):
@@ -757,6 +427,8 @@ class RRTTree(object):
     def add(self, newnodes):
         if not isinstance(newnodes, list):
             newnodes = [newnodes]
+        for node in newnodes:
+            node.tree = self
         self.node_storage.add(newnodes)
 
     def find_nearest(self, node):
@@ -865,7 +537,7 @@ class RRTNode(object):
 
     def __eq__(self, other):
         if isinstance(other, RRTNode):
-            if not self._acc is None and not other._acc is None:
+            if not (self._acc is None or other._acc is None):
                 return (    self._pos == other._pos 
                         and self._vel == other._vel 
                         and self._acc == other._acc 
@@ -878,15 +550,15 @@ class RRTNode(object):
             return False
     def __ne__(self, other):
         if isinstance(other, RRTNode):
-            if not self._acc is None and not other._acc is None:
+            if not (self._acc is None or other._acc is None):
                 return (   self._pos != other._pos 
                         or self._vel != other._vel 
                         or self._acc != other._acc 
-                        or isclose(self._yaw, other._yaw))
+                        or not isclose(self._yaw, other._yaw))
             else:
                 return (   self._pos != other._pos 
                         or self._vel != other._vel 
-                        or isclose(self._yaw, other._yaw))
+                        or not isclose(self._yaw, other._yaw))
         else:
             return True
 
@@ -958,7 +630,7 @@ class RRTNode(object):
         except AttributeError:
             pass
 
-    def set_next_link(self, next_node, next_traj):
+    def set_next_link(self, next_node, next_traj, update_cost=True):
         assert self._pos == next_traj.pos(0)
         assert self._vel == next_traj.vel(0)
         if self._acc is None:
@@ -969,28 +641,24 @@ class RRTNode(object):
         self._next_node = next_node
         self._next_traj = next_traj
 
-        if next_node is None:
-            self.cost_to_goal = 0
-        else:
+        if update_cost:
             try:
                 self.cost_to_goal = next_node.cost_to_goal + next_traj.T
             except AttributeError:
                 pass
 
-    def set_prev_link(self, prev_node, prev_traj):
+    def set_prev_link(self, prev_node, prev_traj, update_cost=True):
         assert self._pos == prev_traj.pos(-1)
         assert self._vel == prev_traj.vel(-1)
         if self._acc is None:
-            self._acc = prev_traj.acc(0)
+            self._acc = prev_traj.acc(-1)
         else:
-            assert self._acc == prev_traj.acc(0)
+            assert self._acc == prev_traj.acc(-1)
 
         self._prev_node = prev_node
         self._prev_traj = prev_traj
 
-        if prev_node is None:
-            self.cost = 0
-        else:
+        if update_cost:
             try:
                 self.cost = prev_node.cost + prev_traj.T
             except AttributeError:
@@ -998,8 +666,18 @@ class RRTNode(object):
 
     @staticmethod
     def link_nodes(node1, node2, traj):
-        node1.set_next_link(node2, traj)
-        node2.set_prev_link(node1, traj)
+        node1.set_next_link(node2, traj, update_cost=False)
+        node2.set_prev_link(node1, traj, update_cost=False)
+
+        # Update costs after nodes been linked
+        try:
+            node1.cost_to_goal = node2.cost_to_goal + traj.T
+        except AttributeError:
+            pass
+        try:
+            node2.cost = node1.cost + traj.T
+        except AttributeError:
+            pass
 
 
 def newCubicBezier(parentnode, targetnode, T):

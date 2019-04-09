@@ -2,6 +2,6 @@
 bool start
 ---
 # Define the result
-bool success
+string message
 ---
 # Define a feedback message

@@ -188,20 +188,14 @@ class Gridmap(object):
         return self.query_points(points)
 
     def _query_bezier(self, bezier):
-        nrsamples = int(bezier.T / 0.05)
+        nrsamples = int(bezier.T / 0.1)
         t_samples = np.linspace(0, bezier.T, nrsamples)
         
-        # Test chunks seperately
-        chunk_size = 20
-        i = chunk_size
-        while i <= len(t_samples):
-            t_chunk = t_samples[i-chunk_size:i]
-            points = [bezier.pos(t) for t in t_chunk]
-            if self._query_points(points):
-                return True
-            i += chunk_size
-        last_chunk = t_samples[i-chunk_size:]
-        points = [bezier.pos(t) for t in last_chunk]
+        # Test slices seperately
+        step = 10
+        for i in range(step):
+            t_slice = t_samples[i::step]
+            points = [bezier.pos(t) for t in t_slice]
         if self._query_points(points):
             return True
 
@@ -400,7 +394,7 @@ class Octree(object):
         return self.query_points(points)
 
     def query_bezier(self, bezier):
-        nrsamples = int(bezier.T / 0.05)
+        nrsamples = int(bezier.T / 0.1)
         points = [bezier.pos(t) for t in np.linspace(0, bezier.T, nrsamples)]
         return self.query_points(points)
 
