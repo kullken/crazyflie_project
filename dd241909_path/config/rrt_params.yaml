@@ -2,7 +2,7 @@ iterations: 500
 goal_sample_prob: 0.2
 connect_trees_prob: 0.2
 
-max_step_length: 0.5
+max_step_length: 1.0
 min_step_time: 0.2
 max_step_time: 10
 
