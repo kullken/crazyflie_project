@@ -12,9 +12,13 @@ import rospy
 from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker, MarkerArray
 
-from geometry import Vec3, Line, Bezier
+#from geometry import Vec3, Line, Bezier
 
 from myprofiling import profile
+
+import pyximport
+pyximport.install()
+from cgeometry import Vec3, Line, Bezier
 
 
 def create_map(map_data, type='grid'):
@@ -146,7 +150,7 @@ class Gridmap(object):
         self.max        = max
         self.resolution = resolution
         self.origin     = self.min
-
+        
         # Initialise grid with false values
         max_index = self._point_to_index(self.max)
         self.shape = (max_index[0]+1, max_index[1]+1, max_index[2]+1)
@@ -190,14 +194,14 @@ class Gridmap(object):
     def _query_bezier(self, bezier):
         nrsamples = int(bezier.T / 0.1)
         t_samples = np.linspace(0, bezier.T, nrsamples)
-        
+
         # Test slices seperately
         step = 10
         for i in range(step):
             t_slice = t_samples[i::step]
             points = [bezier.pos(t) for t in t_slice]
-        if self._query_points(points):
-            return True
+            if self._query_points(points):
+                return True
 
         return False
 

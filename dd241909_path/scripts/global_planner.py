@@ -19,9 +19,13 @@ from crazyflie_driver.msg import TrajectoryPolynomialPiece
 from dd241909_msgs.msg import Trajectory
 from dd241909_msgs.msg import SimpleAction, SimpleResult
 
-from geometry import Vec3, Waypoint
+#from geometry import Vec3, Waypoint
 from maps import create_map
 from rrt import RRT
+
+import pyximport
+pyximport.install()
+from cgeometry import Vec3, Waypoint
 
 def transform_to_pose(tf):
     pose = PoseStamped()
@@ -99,7 +103,7 @@ class GlobalPlanner(object):
         return
 
     def plan_cb(self, goal):
-
+        
         # Wait for map to be created
         while not rospy.is_shutdown():
             if hasattr(self, 'map'):

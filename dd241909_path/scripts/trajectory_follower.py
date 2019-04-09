@@ -201,8 +201,6 @@ class TrajectoryFollower(object):
                     msg.header.frame_id = self.traj.header.frame_id
                     msg.header.stamp = t_now
                     yaw = posyaw[3] % 360
-                    msg.pose  = newPose(posyaw[0], posyaw[1], posyaw[2], 0.0, 0.0, posyaw[3])
-                    msg.twist = newTwist(velyaw[0], velyaw[1], velyaw[2], 0.0, 0.0, velyaw[3])
                     msg.pose  = newPose(posyaw[0], posyaw[1], posyaw[2], yaw, yaw, yaw)
                     msg.twist = newTwist(velyaw[0], velyaw[1], velyaw[2], velyaw[3], velyaw[3], velyaw[3])
                     msg.acc   = Vector3(accyaw[0], accyaw[1], accyaw[2])
