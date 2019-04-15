@@ -7,8 +7,9 @@ import rospy
 import tf2_ros
 import tf2_geometry_msgs
 import actionlib
+from std_msgs.msg import Empty
 from nav_msgs.msg import Path
-from geometry_msgs.msg import PoseStamped, Pose, Twist, Point, Vector3
+from geometry_msgs.msg import PoseStamped, Pose, Twist, Point, Vector3, Quaternion
 from tf.transformations import quaternion_from_euler, euler_from_quaternion
 from rospy.exceptions import ROSInterruptException
 from tf2_ros import ExtrapolationException
@@ -33,29 +34,35 @@ class TrajectoryFollower(object):
         self.cmd_rate = rospy.Rate(20) # Send commands at this rate
 
         # Access ros parameters
-        tfprefix            = rospy.get_param(rospy.get_name() + '/tfprefix')
-        path_topic          = rospy.get_param(rospy.get_name() + '/path_topic')
-        trajectory_topic    = rospy.get_param(rospy.get_name() + '/trajectory_topic')
-        cmdpos_topic        = rospy.get_param(rospy.get_name() + '/cmdpos_topic')
-        cmdfull_topic       = rospy.get_param(rospy.get_name() + '/cmdfull_topic')
-        stop_srv_name       = rospy.get_param(rospy.get_name() + '/stop_srv_name')
-        navigate_action     = rospy.get_param(rospy.get_name() + '/navigate_action')
+        tfprefix            = rospy.get_param('~tfprefix')
+        path_topic          = rospy.get_param('~path_topic')
+        trajectory_topic    = rospy.get_param('~trajectory_topic')
+        cmdstop_topic       = rospy.get_param('~cmdstop_topic')
+        cmdpos_topic        = rospy.get_param('~cmdpos_topic')
+        cmdfull_topic       = rospy.get_param('~cmdfull_topic')
+        stop_srv_name       = rospy.get_param('~stop_srv_name')
+        navigate_action     = rospy.get_param('~navigate_action')
         takeoff_action      = rospy.get_param('~takeoff_action')
         rotate_action       = rospy.get_param('~rotate_action')
-        hover_action        = rospy.get_param(rospy.get_name() + '/hover_action')
-        land_action         = rospy.get_param(rospy.get_name() + '/land_action')
+        hover_action        = rospy.get_param('~hover_action')
+        land_action         = rospy.get_param('~land_action')
 
         # Subscribers
         self.path = None
         self.path_sub = rospy.Subscriber(path_topic, Path, self.path_cb)
         self.traj = None
         self.traj_sub = rospy.Subscriber(trajectory_topic, Trajectory, self.traj_cb)
-        # self.has_seen_marker = False
-        # self.seen_marker_sub = rospy.Subscriber('aruco/result', Trajectory, self.traj_cb)
 
         # Publishers
+        self.cmdstop_pub = rospy.Publisher(cmdstop_topic, Empty, queue_size=1)
         self.cmdpos_pub = rospy.Publisher(cmdpos_topic, Position, queue_size=1)
         self.cmdfull_pub = rospy.Publisher(cmdfull_topic, FullState, queue_size=1)
+
+        # Send stop command on shutdown
+        def stop():
+            rospy.loginfo('Shutdown detected. Sending stop command!')
+            self.cmdstop_pub.publish(Empty())
+        rospy.on_shutdown(stop)
 
         # Set up tf stuff
         self.base_frame = 'base_link'
@@ -67,8 +74,8 @@ class TrajectoryFollower(object):
         self.tf_lstn = tf2_ros.TransformListener(self.tf_buff)
 
         # Service clients
-        rospy.wait_for_service(stop_srv_name)
-        self.stop_srv = rospy.ServiceProxy(stop_srv_name, Stop)
+        # rospy.wait_for_service(stop_srv_name)
+        # self.stop_srv = rospy.ServiceProxy(stop_srv_name, Stop)
 
         # Action servers
         self.nav_server = actionlib.SimpleActionServer(
@@ -123,21 +130,31 @@ class TrajectoryFollower(object):
 
     def navigate_path_cb(self, goal):
         try:
+            # Wait for a path to be published
             while not self.path:
+                if self.nav_server.is_preempt_requested():
+                    rospy.loginfo(rospy.get_name() + ': Navigation preempted!')
+                    self.nav_server.set_preempted(SimpleResult(message=''))
+                    return
                 rospy.loginfo_throttle(10, rospy.get_name() + ': Waiting for path...')
                 self.wait_rate.sleep()
             rospy.loginfo(rospy.get_name() + ': Path recieved.')
 
             rospy.loginfo(rospy.get_name() + ': Off we go!')
-            path = self.path
-            for target in path.poses:
+            for target_pose in self.path.poses:
                 rospy.loginfo(rospy.get_name() + ': Moving to new pose...')
-                current_pose = self.get_base_pose()
-                while pose_dist(target.pose, current_pose.pose) >= self.tol:
-                    target.header.stamp = rospy.Time.now()
-                    self.cmdpos_pub.publish(target)
-                    current_pose = self.get_base_pose()
-                    # TODO: Check preemption
+                while not rospy.is_shutdown():
+                    if self.nav_server.is_preempt_requested():
+                        rospy.loginfo(rospy.get_name() + ': Navigation preempted!')
+                        self.nav_server.set_preempted(SimpleResult(message=''))
+                        return
+
+                    dist = pose_dist(target_pose.pose, self.get_base_pose().pose)
+                    if dist < self.tol:
+                        break
+
+                    target_pose.header.stamp = rospy.Time.now()
+                    self.cmdpos_pub.publish(target_pose)
                     self.cmd_rate.sleep()
 
             rospy.loginfo(rospy.get_name() + ': Path Completed!')
@@ -147,7 +164,12 @@ class TrajectoryFollower(object):
 
     def navigate_traj_cb(self, goal):
         try:
+            # Wait for a trajectory to be published
             while not self.traj:
+                if self.nav_server.is_preempt_requested():
+                    rospy.loginfo(rospy.get_name() + ': Navigation preempted!')
+                    self.nav_server.set_preempted(SimpleResult(message=''))
+                    return
                 rospy.loginfo_throttle(10, rospy.get_name() + ': Waiting for trajectory...')
                 self.wait_rate.sleep()
             rospy.loginfo(rospy.get_name() + ': Trajectory recieved.')
@@ -188,7 +210,12 @@ class TrajectoryFollower(object):
                     C_acc[3, i] = (i+1) * C_vel[3,i+1]
 
                 t = rospy.Time.now() - t0 - passed_t # For first comparision
-                while t <= piece.duration:
+                while not rospy.is_shutdown() and t <= piece.duration:
+                    if self.nav_server.is_preempt_requested():
+                        rospy.loginfo(rospy.get_name() + ': Navigation preempted!')
+                        self.nav_server.set_preempted(SimpleResult(message=''))
+                        return
+                    
                     t_now = rospy.Time.now()
                     t = t_now - t0 - passed_t
                     tsec = t.to_sec()
@@ -197,15 +224,26 @@ class TrajectoryFollower(object):
                     velyaw = np.dot(C_vel, tv)
                     accyaw = np.dot(C_acc, tv)
 
-                    msg = FullState()
+                    # msg = FullState()
+                    # msg.header.frame_id = self.traj.header.frame_id
+                    # msg.header.stamp = t_now
+                    # yaw = posyaw[3] % 360
+                    # msg.pose  = newPose(posyaw[0], posyaw[1], posyaw[2], 0.0, 0.0, yaw)
+                    # msg.twist = newTwist(velyaw[0], velyaw[1], velyaw[2], 0.0, 0.0, velyaw[3])
+                    # msg.acc   = Vector3(accyaw[0], accyaw[1], accyaw[2])
+
+                    # self.cmdfull_pub.publish(msg)
+                    # self.cmd_rate.sleep()
+
+                    msg = Position()
                     msg.header.frame_id = self.traj.header.frame_id
                     msg.header.stamp = t_now
-                    yaw = posyaw[3] % 360
-                    msg.pose  = newPose(posyaw[0], posyaw[1], posyaw[2], yaw, yaw, yaw)
-                    msg.twist = newTwist(velyaw[0], velyaw[1], velyaw[2], velyaw[3], velyaw[3], velyaw[3])
-                    msg.acc   = Vector3(accyaw[0], accyaw[1], accyaw[2])
+                    msg.x = posyaw[0]
+                    msg.y = posyaw[1]
+                    msg.z = posyaw[2]
+                    msg.yaw = posyaw[3] % 360
 
-                    self.cmdfull_pub.publish(msg)
+                    self.cmdpos_pub.publish(msg)
                     self.cmd_rate.sleep()
 
                 # When piece is done update passed_t
@@ -223,21 +261,34 @@ class TrajectoryFollower(object):
             msg = cfposition_from_pose(target_pose)
             msg.z = 0.4
 
+            # Move close to target pose
             while not rospy.is_shutdown():
-                msg.header.stamp = rospy.Time.now()
-                self.cmdpos_pub.publish(msg)
-
-                # TODO: Check preemption
+                if self.takeoff_server.is_preempt_requested():
+                    rospy.loginfo(rospy.get_name() + ': Takeoff preempted!')
+                    self.takeoff_server.set_preempted(SimpleResult(message=''))
+                    return
 
                 dist = pose_dist(target_pose.pose, self.get_base_pose(frame_id=self.odom_frame).pose)
-                if dist < 0.05:
-                    self.takeoff_server.set_succeeded(SimpleResult(message=''))
-                    return
-                else:
-                    rospy.loginfo_throttle(1, 'Takeoff: dist = {}'.format(round(dist, 4)))
+                if dist < self.tol:
+                    break
+
+                msg.header.stamp = rospy.Time.now()
+                self.cmdpos_pub.publish(msg)
                 self.cmd_rate.sleep()
-                
-                
+            
+            # Wait a bit to stabilise before exiting
+            for _ in range(20):
+                if self.takeoff_server.is_preempt_requested():
+                    rospy.loginfo(rospy.get_name() + ': Takeoff preempted!')
+                    self.takeoff_server.set_preempted(SimpleResult(message=''))
+                    return
+
+                msg.header.stamp = rospy.Time.now()
+                self.cmdpos_pub.publish(msg)
+                self.cmd_rate.sleep()
+
+            rospy.loginfo(rospy.get_name() + ': Takeoff completed!')
+            self.takeoff_server.set_succeeded(SimpleResult(message=''))
         except ROSInterruptException:
             self.takeoff_server.set_aborted(SimpleResult(message=''))
 
@@ -245,63 +296,66 @@ class TrajectoryFollower(object):
         try:
             rospy.loginfo(rospy.get_name() + ': Start rotate!')
             target_pose = self.get_base_pose(frame_id=self.odom_frame)
+            target_pose.pose.position.z = 0.4
             msg = cfposition_from_pose(target_pose)
-            msg.z = 0.4
 
             while not rospy.is_shutdown():
-                rospy.loginfo_throttle(5, 'Rotating...')
-                
-                msg.header.stamp = rospy.Time.now()
-                self.cmdpos_pub.publish(msg)
-
-                msg.yaw += 0.5
-                if msg.yaw >= 360.0:
-                    msg.yaw -= 360.0
-
                 if self.rotate_server.is_preempt_requested():
                     rospy.loginfo(rospy.get_name() + ': Rotate preempted!')
                     self.rotate_server.set_preempted(SimpleResult(message=''))
                     return
 
+                rospy.loginfo_throttle(5, rospy.get_name() + ': Rotating...')
+
+                msg.yaw = (msg.yaw + 0.5) % 360.0
+                msg.header.stamp = rospy.Time.now()
+                self.cmdpos_pub.publish(msg)
                 self.cmd_rate.sleep()
-                
+            
+            rospy.loginfo(rospy.get_name() + ': Rotate detected shutdown. Aborting...')
+            self.rotate_server.set_aborted(SimpleResult(message=''))
         except ROSInterruptException:
             self.rotate_server.set_aborted(SimpleResult(message=''))
 
     def hover_cb(self, goal):
         try:
             rospy.loginfo(rospy.get_name() + ': Hovering...')
-            target_pose = self.get_base_pose()
+            target_pose = self.get_base_pose(frame_id=self.odom_frame)
             msg = cfposition_from_pose(target_pose)
-            
             msg.z = max(msg.z, 0.4)
 
             rospy.loginfo(rospy.get_name() + ': ... at ({}, {}, {}, {})'.format(msg.x, msg.y, msg.z, msg.yaw))
 
             while not rospy.is_shutdown():
-                rospy.loginfo_throttle(10, rospy.get_name() + ': Hovering...')
-
-                msg.header.stamp = rospy.Time.now()
-                self.cmdpos_pub.publish(msg)
-
                 if self.hover_server.is_preempt_requested():
                     rospy.loginfo(rospy.get_name() + ': Hover preempted!')
                     self.hover_server.set_preempted(SimpleResult(message=''))
                     return
-                
+
+                rospy.loginfo_throttle(10, rospy.get_name() + ': Hovering...')
+
+                msg.header.stamp = rospy.Time.now()
+                self.cmdpos_pub.publish(msg)
                 self.cmd_rate.sleep()
-                
+            
+            rospy.loginfo(rospy.get_name() + ': Hover detected shutdown. Aborting...')
+            self.hover_server.set_aborted(SimpleResult(message='')) 
         except ROSInterruptException:
             self.hover_server.set_aborted(SimpleResult(message=''))
 
     def land_cb(self, goal):
         try:
             rospy.loginfo(rospy.get_name() + ': Landing...')
-            current_pose = self.get_base_pose()
+            current_pose = self.get_base_pose(frame_id=self.odom_frame)
             msg = cfposition_from_pose(current_pose)
 
             while not rospy.is_shutdown() and current_pose.pose.position.z > 0.1:
-                current_pose = self.get_base_pose()
+                if self.land_server.is_preempt_requested():
+                    rospy.loginfo(rospy.get_name() + ': Land preempted!')
+                    self.land_server.set_preempted(SimpleResult(message=''))
+                    return
+
+                current_pose = self.get_base_pose(frame_id=self.odom_frame)
                 z_error = current_pose.pose.position.z - 0.1
                 if abs(z_error) < 0.05:
                     msg.z = 0.1
@@ -310,16 +364,11 @@ class TrajectoryFollower(object):
 
                 msg.header.stamp = rospy.Time.now()
                 self.cmdpos_pub.publish(msg)
-                
-                if self.land_server.is_preempt_requested():
-                    rospy.loginfo(rospy.get_name() + ': Land preempted!')
-                    self.land_server.set_preempted(SimpleResult(message=''))
-                    return
-
                 self.cmd_rate.sleep()
 
             rospy.loginfo(rospy.get_name() + ': Calling stop service...')
-            self.stop_srv(0)
+            #self.stop_srv(0)
+            self.cmdstop_pub.publish(Empty())
             rospy.loginfo(rospy.get_name() + ': Landing completed.')
 
             self.land_server.set_succeeded(SimpleResult(message=''))
@@ -327,14 +376,15 @@ class TrajectoryFollower(object):
             self.land_server.set_aborted(NavigateResult(message=''))
 
     def get_base_pose(self, frame_id='map'):
-        current_pose = newPoseStamped(0, 0, 0, 0, 0, 0, self.base_frame)
-        while not rospy.is_shutdown():
-            try:
-                return self.tf_buff.transform(current_pose, frame_id, rospy.Duration(0.05))
-            except ExtrapolationException:
-                rospy.logwarn_throttle(1.0, rospy.get_name() + ': Cannot transform from {} to {}'.format(self.base_frame, frame_id))
-                self.wait_rate.sleep()
+        current_pose = newPoseStamped(0, 0, 0, 0, 0, 0, self.base_frame, stamp=rospy.Time())
+        # while not rospy.is_shutdown():
+        #     try:
+        #         return self.tf_buff.transform(current_pose, frame_id, rospy.Duration(0.05))
+        #     except ExtrapolationException:
+        #         rospy.logwarn_throttle(1.0, rospy.get_name() + ': Cannot transform from {} to {}'.format(self.base_frame, frame_id))
+        #         self.wait_rate.sleep()
 
+        return self.tf_buff.transform_full(current_pose, frame_id, rospy.Time(), fixed_frame='map')
 
 
 def newPoseStamped(x, y, z, roll, pitch, yaw, frame_id, stamp=None):
@@ -372,15 +422,23 @@ def newTwist(x, y, z, roll, pitch, yaw):
     twist.angular.z = yaw
     return twist
 
+def newQuaternion(roll, pitch, yaw, radians=True):
+    if not radians:
+        roll = roll * math.pi/180.0
+        pitch = pitch * math.pi/180.0
+        yaw = yaw * math.pi/180.0
+
+    q = Quaternion()
+    q.x, q.y, q.z, q.w = quaternion_from_euler(roll, pitch, yaw)
+    return q
+
 def cfposition_from_pose(pose):
-    # Convert to crazyflie position msg (x,y,z,yaw)
     roll, pitch, yaw = euler_from_quaternion((
             pose.pose.orientation.x,
             pose.pose.orientation.y,
             pose.pose.orientation.z,
             pose.pose.orientation.w
     ))
-    # NOTE Yaw is in degrees.
     position = Position(
             pose.header,
             pose.pose.position.x,
@@ -388,10 +446,7 @@ def cfposition_from_pose(pose):
             pose.pose.position.z,
             yaw*180.0/math.pi
     )
-
     return position
-
-
 
 def point_dist(p1, p2):
     return math.sqrt((p1.x-p2.x)**2 + (p1.y-p2.y)**2 + (p1.z-p2.z)**2)
@@ -413,8 +468,6 @@ def pose_dist(pose1, pose2):
         p2 = pose2.translation
         q2 = pose2.rotation
     return point_dist(p1, p2) + quat_dist(q1, q2)
-
-
 
 
 if __name__ == '__main__':

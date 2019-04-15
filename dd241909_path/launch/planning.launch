@@ -25,6 +25,7 @@
         <param name="navgoal_topic"         value="$(arg navgoal_topic)"/>
         <param name="path_topic"            value="$(arg path_topic)"/>
         <param name="trajectory_topic"      value="$(arg trajectory_topic)"/>
+        <param name="cmdstop_topic"         value="cmd_stop"/>
         <param name="cmdpos_topic"          value="cmd_position"/>
         <param name="cmdfull_topic"         value="cmd_full_state"/>
         <param name="stop_srv_name"         value="stop"/>
