@@ -30,9 +30,12 @@ def create_map(map_data, type='grid'):
     off_ground  = rospy.get_param(rospy.get_namespace() + 'map/gate_off_ground')
     side_margin = rospy.get_param(rospy.get_namespace() + 'map/gate_side_margin')
 
-    airspace_min = Vec3(*map_data['airspace']['min'])
-    #airspace_max = Vec3(*map_data['airspace']['max'])
-    airspace_max = Vec3(map_data['airspace']['max'][0], map_data['airspace']['max'][1], 1.0)
+    z_min = 0.0
+    z_max = 1.0
+    # airspace_min = Vec3(*map_data['airspace']['min'])
+    airspace_min = Vec3(map_data['airspace']['min'][0], map_data['airspace']['min'][1], z_min)
+    # airspace_max = Vec3(*map_data['airspace']['max'])
+    airspace_max = Vec3(map_data['airspace']['max'][0], map_data['airspace']['max'][1], z_max)
 
     # Convert obstacle to point cloud with finer resolution than map representation
     points = set()
@@ -61,7 +64,7 @@ def create_map(map_data, type='grid'):
     # Publish map shapes to rviz
     if rospy.get_param(rospy.get_name() + '/use_rviz'):
         publish_map_to_rviz(map, points)
-    
+
     return map
 
 def gate_to_points(gate, resolution, coll_rad, gate_size, off_ground, side_margin, z_max):

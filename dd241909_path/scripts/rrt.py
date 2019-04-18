@@ -340,7 +340,7 @@ class RRT(object):
                             i += 2
 
             improvement = cost - nodes[-1].cost
-            print('Improvement: {} sec'.format(round(improvement, 4)))
+            # print('Improvement: {} sec'.format(round(improvement, 4)))
             if improvement <= 0:
                 break
             cost = nodes[-1].cost
@@ -416,7 +416,6 @@ class RRT(object):
         return goalnode
 
 
-
 class RRTTree(object):
 
     def __init__(self, root, id=''):
@@ -446,13 +445,13 @@ class RRTTree(object):
         pass
         # nearests = self.node_storage.query_nn(newnode, 5)
         # for neighbour in nearests:
-        #     if neighbour == newnode.parent:
+        #     if neighbour == newnode.prev_node:
         #         continue
         #     newcost = newnode.cost + RRT.cost(newnode, neighbour)
         #     if neighbour.cost > newcost:
         #         line = Line(neighbour.pos, newnode.pos)
         #         if map.query(line):
-        #             neighbour.parent = newnode
+        #             neighbour.prev_node = newnode
         #             neighbour.cost = newcost
 
 
@@ -684,10 +683,10 @@ class RRTNode(object):
 
 
 def newCubicBezier(parentnode, targetnode, T):
-    parent_p1 = parentnode.parent_traj.points[1]
-    parent_p2 = parentnode.parent_traj.points[2]
-    parent_p3 = parentnode.parent_traj.points[3]
-    parent_T = parentnode.parent_traj.T
+    parent_p1 = parentnode.prev_traj.points[1]
+    parent_p2 = parentnode.prev_traj.points[2]
+    parent_p3 = parentnode.prev_traj.points[3]
+    parent_T = parentnode.prev_traj.T
 
     p0 = parent_p3
     p1 = (T/parent_T) * (parent_p3 - parent_p2) + p0
@@ -698,7 +697,7 @@ def newCubicBezier(parentnode, targetnode, T):
 
 def newQuarticBezier(connectnode, targetnode, T, reverse=False):
     if reverse:
-        end_acc = connectnode.child_traj.acc(0)
+        end_acc = connectnode.next_traj.acc(0)
 
         p4 = connectnode.pos
         p3 = -T/4 * connectnode.vel + p4
@@ -709,7 +708,7 @@ def newQuarticBezier(connectnode, targetnode, T, reverse=False):
         # Ad-hoc fix?
         p2 = Vec3(p2.x, p2.y, (p0.z + p4.z) / 2)
     else:
-        start_acc = connectnode.parent_traj.acc(connectnode.parent_traj.T)
+        start_acc = connectnode.prev_traj.acc(connectnode.prev_traj.T)
 
         p0 = connectnode.pos
         p1 = T/4 * connectnode.vel + p0
@@ -803,9 +802,9 @@ def tree_to_markers(tree, ns=''):
             if node == tree.root:
                 continue
             elif ns == 'goal_':
-                connector = node.child
+                connector = node.next_node
             else:
-                connector = node.parent
+                connector = node.prev_node
             line_marker.points.append(Point(node.x, node.y, node.z))
             line_marker.points.append(Point(connector.x, connector.y, connector.z))
 

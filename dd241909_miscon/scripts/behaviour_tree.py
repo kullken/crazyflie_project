@@ -51,34 +51,17 @@ def create_root():
 
 def create_navigate():
 
-    # Localise behaviour
+    # Takeoff
     takeoff = py_trees_ros.actions.ActionClient(
             name='Takeoff',
             action_namespace=takeoff_action,
             action_spec=SimpleAction,
             action_goal=SimpleGoal()
     )
-    rotate = py_trees_ros.actions.ActionClient(
-            name='Rotate',
-            action_namespace=rotate_action,
-            action_spec=SimpleAction,
-            action_goal=SimpleGoal()
-    )
-    wait_for_marker = py_trees_ros.subscribers.WaitForData(
-            name='Wait for marker',
-            topic_name=aruco_marker_topic,
-            topic_type=MarkerArray,
-            clearing_policy=py_trees.common.ClearingPolicy.NEVER
-    )
+    takeoff_once = py_trees.decorators.OneShot(takeoff, 'Once')
 
-    rotate_and_look = py_trees.composites.Parallel(
-            name='Rotate and look',
-            policy=py_trees.common.ParallelPolicy.SUCCESS_ON_ONE
-    )
-    rotate_and_look.add_children([rotate, wait_for_marker])
-
-    localise = py_trees.composites.Sequence('Localise')
-    localise.add_children([takeoff, rotate_and_look])
+    # Localise behaviour
+    localise = create_localise()
     localise_once = py_trees.decorators.OneShot(localise, 'Once')
 
     # Plan behaviour
@@ -123,11 +106,69 @@ def create_navigate():
     # Build tree
     navigate = py_trees.composites.Sequence('Navigate')
     #navigate.add_children([localise_once, plan_once, run_course_once, nav_land, nav_idle])
-    navigate.add_children([plan_once, run_course_once, nav_land, nav_idle])
+    navigate.add_children([takeoff_once, plan_once, run_course_once, nav_land, nav_idle])
 
     return navigate
 
-def shutdown(tree):
+def create_localise():
+    rotate = py_trees_ros.actions.ActionClient(
+            name='Rotate',
+            action_namespace=rotate_action,
+            action_spec=SimpleAction,
+            action_goal=SimpleGoal()
+    )
+    wait_for_marker = py_trees_ros.subscribers.WaitForData(
+            name='Wait for marker',
+            topic_name=aruco_marker_topic,
+            topic_type=MarkerArray,
+            clearing_policy=py_trees.common.ClearingPolicy.NEVER
+    )
+
+    idle = py_trees.behaviours.Running('Idle')
+
+    localise = py_trees.composites.Parallel(
+            name='Localise',
+            policy=py_trees.common.ParallelPolicy.SUCCESS_ON_ONE
+    )
+    #localise.add_children([rotate, wait_for_marker])
+    localise.add_children([rotate, idle])
+
+    return localise
+
+def create_rotate_and_land():
+    takeoff = py_trees_ros.actions.ActionClient(
+            name='Takeoff',
+            action_namespace=takeoff_action,
+            action_spec=SimpleAction,
+            action_goal=SimpleGoal()
+    )
+
+    localise = create_localise()
+    localise = py_trees.decorators.Timeout(
+            child=localise, 
+            name='Max 10 sec',
+            duration=10.0
+    )
+    localise = py_trees.decorators.FailureIsSuccess(
+            child=localise,
+            name='Failure is Success'
+    )
+
+    land = py_trees_ros.actions.ActionClient(
+            name='Land',
+            action_namespace=land_action,
+            action_spec=SimpleAction,
+            action_goal=SimpleGoal()
+    )
+
+    idle = py_trees.behaviours.Running('Idle')
+
+    root = py_trees.composites.Sequence('Root')
+    root.add_children([takeoff, localise, land, idle])
+
+    return root
+
+def tree_shutdown(tree):
     tree.interrupt()
 
 if __name__ == '__main__':
@@ -136,24 +177,25 @@ if __name__ == '__main__':
     # Access ros parameters
     trajectory_topic    = rospy.get_param('~trajectory_topic')
     aruco_marker_topic  = rospy.get_param('~aruco_marker_topic')
-    navigate_action     = rospy.get_param(rospy.get_name() + '/navigate_action')
+    navigate_action     = rospy.get_param('~navigate_action')
     plan_action         = rospy.get_param('~plan_action')
     takeoff_action      = rospy.get_param('~takeoff_action')
     rotate_action       = rospy.get_param('~rotate_action')
-    hover_action        = rospy.get_param(rospy.get_name() + '/hover_action')
-    land_action         = rospy.get_param(rospy.get_name() + '/land_action')
+    hover_action        = rospy.get_param('~hover_action')
+    land_action         = rospy.get_param('~land_action')
 
-    #root = create_root()
-    plan = py_trees_ros.actions.ActionClient(
-            name='Plan',
-            action_namespace=plan_action,
-            action_spec=SimpleAction,
-            action_goal=SimpleGoal()
-    )
-    root = py_trees.decorators.OneShot(plan, 'Once')
+    root = create_root()
+    # plan = py_trees_ros.actions.ActionClient(
+    #         name='Plan',
+    #         action_namespace=plan_action,
+    #         action_spec=SimpleAction,
+    #         action_goal=SimpleGoal()
+    # )
+    # root = py_trees.decorators.OneShot(plan, 'Once')
+    # root = create_rotate_and_land()
 
     tree = py_trees_ros.trees.BehaviourTree(root)
-    rospy.on_shutdown(functools.partial(shutdown, tree))
+    rospy.on_shutdown(functools.partial(tree_shutdown, tree))
     tree.setup(20)
     tree.tick_tock(200) # 5 Hz
 

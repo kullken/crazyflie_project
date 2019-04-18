@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+from __future__ import division
+
 import math
 import numpy as np
 
@@ -181,7 +183,11 @@ class TrajectoryFollower(object):
 
             rospy.loginfo(rospy.get_name() + ': Off we go!')
             for piece in self.traj.pieces:
-                rospy.loginfo(rospy.get_name() + ': New trajectory piece!')
+                if self.nav_server.is_preempt_requested():
+                    rospy.loginfo(rospy.get_name() + ': Navigation preempted!')
+                    self.nav_server.set_preempted(SimpleResult(message=''))
+                    return
+                rospy.logdebug(rospy.get_name() + ': New trajectory piece!')
 
                 nrterms = len(piece.poly_x)
 
@@ -235,13 +241,9 @@ class TrajectoryFollower(object):
                     # self.cmdfull_pub.publish(msg)
                     # self.cmd_rate.sleep()
 
-                    msg = Position()
-                    msg.header.frame_id = self.traj.header.frame_id
-                    msg.header.stamp = t_now
-                    msg.x = posyaw[0]
-                    msg.y = posyaw[1]
-                    msg.z = posyaw[2]
-                    msg.yaw = posyaw[3] % 360
+                    target_pose = newPoseStamped(posyaw[0], posyaw[1], posyaw[2], 0.0, 0.0, posyaw[3] * math.pi/180.0, 'map', stamp=rospy.Time())
+                    target_pose = self.tf_buff.transform(target_pose, self.odom_frame)
+                    msg = cfposition_from_pose(target_pose)
 
                     self.cmdpos_pub.publish(msg)
                     self.cmd_rate.sleep()
@@ -277,7 +279,7 @@ class TrajectoryFollower(object):
                 self.cmd_rate.sleep()
             
             # Wait a bit to stabilise before exiting
-            for _ in range(20):
+            for _ in range(40):
                 if self.takeoff_server.is_preempt_requested():
                     rospy.loginfo(rospy.get_name() + ': Takeoff preempted!')
                     self.takeoff_server.set_preempted(SimpleResult(message=''))

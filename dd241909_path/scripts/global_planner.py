@@ -62,14 +62,15 @@ class GlobalPlanner(object):
         self.wait_rate = rospy.Rate(10)
 
         # Access ros parameters
-        map_file            = rospy.get_param(rospy.get_name() + '/map_file')
-        tfprefix            = rospy.get_param(rospy.get_name() + '/tfprefix')
-        path_topic          = rospy.get_param(rospy.get_name() + '/path_topic')
-        trajectory_topic    = rospy.get_param(rospy.get_name() + '/trajectory_topic')
+        map_file            = rospy.get_param('~map_file')
+        tfprefix            = rospy.get_param('~tfprefix')
+        path_topic          = rospy.get_param('~path_topic')
+        trajectory_topic    = rospy.get_param('~trajectory_topic')
         plan_action         = rospy.get_param('~plan_action')
-        self.use_rviz       = rospy.get_param(rospy.get_name() + '/use_rviz')
-        self.wp_gate_dist   = rospy.get_param(rospy.get_namespace() + 'rrt/waypoint_gate_distance')
-        self.wp_gate_vel    = rospy.get_param(rospy.get_namespace() + 'rrt/waypoint_gate_velocity')
+        self.use_rviz       = rospy.get_param('~use_rviz')
+        self.wp_pre_gate_dist   = rospy.get_param(rospy.get_namespace() + 'rrt/waypoint_pre_gate_distance')
+        self.wp_post_gate_dist  = rospy.get_param(rospy.get_namespace() + 'rrt/waypoint_post_gate_distance')
+        self.wp_gate_vel        = rospy.get_param(rospy.get_namespace() + 'rrt/waypoint_gate_velocity')
 
         # Publishers
         self.path_pub = rospy.Publisher(path_topic, Path, queue_size=1)
@@ -147,7 +148,6 @@ class GlobalPlanner(object):
         traj_msg.pieces = traj_pieces
 
         # Add yaw trajectory based on gates
-        # NOTE: 
         prev_yaw = (start_wp.yaw *180/math.pi) % 360
         i = 0
         for gate in self.map.gates:
@@ -202,9 +202,9 @@ class GlobalPlanner(object):
         for piece in traj_msg.pieces[i-1:]:
             piece.poly_yaw[0] = gate_yaw
 
-        # Print for debug
-        for piece in traj_msg.pieces:
-            print('Yaws: {}'.format(piece.poly_yaw[:2]))
+        # # Print for debug
+        # for piece in traj_msg.pieces:
+        #     print('poly_yaw: {}'.format(piece.poly_yaw))
 
         # Publish path and trajectory
         self.path_pub.publish(path_msg)
@@ -256,8 +256,8 @@ class GlobalPlanner(object):
         yaw = gate['heading'] * math.pi/180
         normal = Vec3(math.cos(yaw), math.sin(yaw), 0.0)
 
-        pos1 = gate['position'] - self.wp_gate_dist*normal
-        pos2 = gate['position'] + self.wp_gate_dist*normal
+        pos1 = gate['position'] - self.wp_pre_gate_dist*normal
+        pos2 = gate['position'] + self.wp_post_gate_dist*normal
 
         vel1 = self.wp_gate_vel * normal
         vel2 = self.wp_gate_vel * normal
@@ -324,7 +324,7 @@ def publish_traj_to_rviz(traj_msg):
     marker.scale.z = 0.02
     marker.points = []
 
-    dt = 0.2
+    dt = 0.1
     tot_t = 0
     accum_t = 0
     for piece in traj_msg.pieces:
