@@ -28,7 +28,6 @@
         <param name="cmdstop_topic"         value="cmd_stop"/>
         <param name="cmdpos_topic"          value="cmd_position"/>
         <param name="cmdfull_topic"         value="cmd_full_state"/>
-        <param name="stop_srv_name"         value="stop"/>
         <param name="navigate_action"       value="$(arg navigate_action)"/>
         <param name="takeoff_action"        value="$(arg takeoff_action)"/>
         <param name="rotate_action"         value="$(arg rotate_action)"/>

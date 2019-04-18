@@ -42,7 +42,6 @@ class TrajectoryFollower(object):
         cmdstop_topic       = rospy.get_param('~cmdstop_topic')
         cmdpos_topic        = rospy.get_param('~cmdpos_topic')
         cmdfull_topic       = rospy.get_param('~cmdfull_topic')
-        stop_srv_name       = rospy.get_param('~stop_srv_name')
         navigate_action     = rospy.get_param('~navigate_action')
         takeoff_action      = rospy.get_param('~takeoff_action')
         rotate_action       = rospy.get_param('~rotate_action')
@@ -74,10 +73,6 @@ class TrajectoryFollower(object):
             self.odom_frame = tfprefix + '/' + self.odom_frame
         self.tf_buff = tf2_ros.Buffer()
         self.tf_lstn = tf2_ros.TransformListener(self.tf_buff)
-
-        # Service clients
-        # rospy.wait_for_service(stop_srv_name)
-        # self.stop_srv = rospy.ServiceProxy(stop_srv_name, Stop)
 
         # Action servers
         self.nav_server = actionlib.SimpleActionServer(
@@ -379,13 +374,6 @@ class TrajectoryFollower(object):
 
     def get_base_pose(self, frame_id='map'):
         current_pose = newPoseStamped(0, 0, 0, 0, 0, 0, self.base_frame, stamp=rospy.Time())
-        # while not rospy.is_shutdown():
-        #     try:
-        #         return self.tf_buff.transform(current_pose, frame_id, rospy.Duration(0.05))
-        #     except ExtrapolationException:
-        #         rospy.logwarn_throttle(1.0, rospy.get_name() + ': Cannot transform from {} to {}'.format(self.base_frame, frame_id))
-        #         self.wait_rate.sleep()
-
         return self.tf_buff.transform_full(current_pose, frame_id, rospy.Time(), fixed_frame='map')
 
 

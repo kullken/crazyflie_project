@@ -14,11 +14,11 @@ from visualization_msgs.msg import Marker, MarkerArray
 
 #from geometry import Vec3, Line, Bezier
 
-from myprofiling import profile
-
 import pyximport
 pyximport.install()
 from cgeometry import Vec3, Line, Bezier
+
+from myprofiling import profile
 
 
 def create_map(map_data, type='grid'):
@@ -545,7 +545,9 @@ def publish_map_to_rviz(map, points):
     delete_msg.markers = [delete_marker]
     rviz_marker_pub.publish(delete_msg)
 
-    rospy.sleep(0.3)
+    #print(1)
+
+    #rospy.sleep(0.3)
 
     id_gen = count()
 
@@ -563,7 +565,7 @@ def publish_map_to_rviz(map, points):
     marker_array = MarkerArray()
     marker_array.markers = markers
     
-    rospy.sleep(0.3)
+    #rospy.sleep(0.3)
 
     rviz_marker_pub.publish(marker_array)
 

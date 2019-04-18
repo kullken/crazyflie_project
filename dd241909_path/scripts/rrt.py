@@ -12,17 +12,17 @@ from visualization_msgs.msg import Marker
 
 #from geometry import Vec3, Line, Bezier, Waypoint, isclose
 
-from myprofiling import profile
-
 import pyximport
 pyximport.install()
 from cgeometry import Vec3, Line, Bezier, Waypoint, isclose
+
+from myprofiling import profile
     
 
 class RRT(object):
 
     _seed = np.random.randint(1000, 9999)
-    _seed = 6176
+    #_seed = 6176
 
     def __init__(self, map):
         self.map = map

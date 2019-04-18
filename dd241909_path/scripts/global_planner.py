@@ -16,12 +16,14 @@ from visualization_msgs.msg import Marker, MarkerArray
 from tf.transformations import quaternion_from_euler, euler_from_quaternion
 
 from crazyflie_driver.msg import TrajectoryPolynomialPiece
+
 from dd241909_msgs.msg import Trajectory
 from dd241909_msgs.msg import SimpleAction, SimpleResult
 
-#from geometry import Vec3, Waypoint
 from maps import create_map
 from rrt import RRT
+
+#from geometry import Vec3, Waypoint
 
 import pyximport
 pyximport.install()
