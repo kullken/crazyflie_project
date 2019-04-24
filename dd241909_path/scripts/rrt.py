@@ -42,6 +42,47 @@ class RRT(object):
         self.vel_max            = rospy.get_param(rospy.get_namespace() + 'crazyflie/vel_max')
         self.acc_max            = rospy.get_param(rospy.get_namespace() + 'crazyflie/acc_max')
 
+        # Initialise empty trajectory cache
+        self.traj_cache = {}
+
+    def plan_traj(self, start_wp, waypoints):
+        # Statistics variables
+        self.collision_dismissals = 0
+        self.vel_dismissals = 0
+        self.acc_dismissals = 0
+
+        waypoints = [start_wp] + waypoints
+        
+        # Plan trajectories not previously cached
+        for start_wp, goal_wp in zip(waypoints[:-1], waypoints[1:]):
+            if (start_wp.id, goal_wp.id) in self.traj_cache:
+                continue
+                
+            startnode = self.startnode_from_wp(start_wp)
+            goalnode = self.goalnode_from_wp(goal_wp)
+            finalnode = self.plan_single_path(startnode, goalnode)
+            if finalnode is None:
+                rospy.logwarn('RRT: Failed between {} and {}'.format(start_wp.id, goal_wp.id))
+                return
+            self.traj_cache[(start_wp.id, goal_wp.id)] = self.postprocess_traj(startnode, finalnode)
+
+        # Concatenate trajectory lists
+        tot_traj = []
+        for start_wp, goal_wp in zip(waypoints[:-1], waypoints[1:]):
+            tot_traj += self.traj_cache[(start_wp.id, goal_wp.id)]
+
+        # Sum trajectory costs
+        tot_cost = 0
+        for bezier in tot_traj:
+            tot_cost += bezier.T
+
+        rospy.loginfo('RRT: Total path cost: {}'.format(tot_cost))
+        rospy.loginfo('RRT: Collision dismissals: {}'.format(self.collision_dismissals))
+        rospy.loginfo('RRT: Velocity dismissals: {}'.format(self.vel_dismissals))
+        rospy.loginfo('RRT: Accelaration dismissals: {}'.format(self.acc_dismissals))
+
+        return tot_traj
+
     def plan_path(self, start_wp, waypoints):
         # Statistics variables
         self.collision_dismissals = 0
@@ -54,21 +95,19 @@ class RRT(object):
             goalnode = self.goalnode_from_wp(wp)
             finalnode = self.plan_single_path(startnode, goalnode)
             # If planning fails, then fly what we got
-            if not finalnode:
-                finalnode = startnode
-                break
+            if finalnode is None:
+                return
             
             wp_nodes.append(finalnode)
             startnode = finalnode
-        #tot_path, tot_traj, tot_cost = self.retrace_path(finalnode)
-        tot_path, tot_traj, tot_cost = self.postprocess_path(wp_nodes)
+        tot_traj, tot_cost = self.postprocess_path(wp_nodes)
 
         rospy.loginfo('RRT: Total path cost: {}'.format(tot_cost))
         rospy.loginfo('RRT: Collision dismissals: {}'.format(self.collision_dismissals))
         rospy.loginfo('RRT: Velocity dismissals: {}'.format(self.vel_dismissals))
         rospy.loginfo('RRT: Accelaration dismissals: {}'.format(self.acc_dismissals))
 
-        return tot_path, tot_traj
+        return tot_traj
 
     def plan_single_path(self, startnode, goalnode):
         
@@ -231,21 +270,23 @@ class RRT(object):
 
         return True
 
-    def retrace_path(self, node):
-        cost = node.cost
-        path = []
+    def postprocess_traj(self, startnode, endnode):
+
+        # Optimise trajectory
+        pre_cost = endnode.cost
+        self.refine_trajectory(startnode, endnode)
+        cost = endnode.cost
+        rospy.loginfo('RRT: Postprocessing done. Decreased cost by {}'.format(round(pre_cost - cost, 4)))
+
+        # Trace nodes backwards while putting Bezier trajectories in a list
         traj = []
-        while not node is None:
-            path.append(Waypoint(
-                    node.x, node.y, node.z,
-                    node.vx, node.vy, node.vz,
-                    node.yaw
-            ))
+        node = endnode
+        while node.prev_node is not None:
             traj.append(node.prev_traj)
             node = node.prev_node
-        path.reverse()
         traj.reverse()
-        return path, traj, cost
+
+        return traj
 
     def postprocess_path(self, wp_nodes):
 
@@ -255,21 +296,14 @@ class RRT(object):
 
         node = wp_nodes[-1]
         cost = node.cost
-        path = []
         traj = []
         while not node is None:
-            path.append(Waypoint(
-                    node.x, node.y, node.z,
-                    node.vx, node.vy, node.vz,
-                    node.yaw
-            ))
             traj.append(node.prev_traj)
             node = node.prev_node
-        path.reverse()
         traj.reverse()
 
         rospy.loginfo('RRT: Postprocessing done. Decreased cost by {}'.format(round(pre_cost - cost, 4)))
-        return path, traj, cost
+        return traj, cost
 
     def refine_trajectory(self, startnode, endnode):
 

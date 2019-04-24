@@ -37,7 +37,6 @@ class TrajectoryFollower(object):
 
         # Access ros parameters
         tfprefix            = rospy.get_param('~tfprefix')
-        path_topic          = rospy.get_param('~path_topic')
         trajectory_topic    = rospy.get_param('~trajectory_topic')
         cmdstop_topic       = rospy.get_param('~cmdstop_topic')
         cmdpos_topic        = rospy.get_param('~cmdpos_topic')
@@ -49,8 +48,6 @@ class TrajectoryFollower(object):
         land_action         = rospy.get_param('~land_action')
 
         # Subscribers
-        self.path = None
-        self.path_sub = rospy.Subscriber(path_topic, Path, self.path_cb)
         self.traj = None
         self.traj_sub = rospy.Subscriber(trajectory_topic, Trajectory, self.traj_cb)
 
@@ -78,7 +75,6 @@ class TrajectoryFollower(object):
         self.nav_server = actionlib.SimpleActionServer(
                 navigate_action, 
                 NavigateAction, 
-                #execute_cb=self.navigate_path_cb,
                 execute_cb=self.navigate_traj_cb,
                 auto_start=False
         )
@@ -124,40 +120,6 @@ class TrajectoryFollower(object):
 
     def traj_cb(self, msg):
         self.traj = msg
-
-    def navigate_path_cb(self, goal):
-        try:
-            # Wait for a path to be published
-            while not self.path:
-                if self.nav_server.is_preempt_requested():
-                    rospy.loginfo(rospy.get_name() + ': Navigation preempted!')
-                    self.nav_server.set_preempted(SimpleResult(message=''))
-                    return
-                rospy.loginfo_throttle(10, rospy.get_name() + ': Waiting for path...')
-                self.wait_rate.sleep()
-            rospy.loginfo(rospy.get_name() + ': Path recieved.')
-
-            rospy.loginfo(rospy.get_name() + ': Off we go!')
-            for target_pose in self.path.poses:
-                rospy.loginfo(rospy.get_name() + ': Moving to new pose...')
-                while not rospy.is_shutdown():
-                    if self.nav_server.is_preempt_requested():
-                        rospy.loginfo(rospy.get_name() + ': Navigation preempted!')
-                        self.nav_server.set_preempted(SimpleResult(message=''))
-                        return
-
-                    dist = pose_dist(target_pose.pose, self.get_base_pose().pose)
-                    if dist < self.tol:
-                        break
-
-                    target_pose.header.stamp = rospy.Time.now()
-                    self.cmdpos_pub.publish(target_pose)
-                    self.cmd_rate.sleep()
-
-            rospy.loginfo(rospy.get_name() + ': Path Completed!')
-            self.nav_server.set_succeeded(NavigateResult(message=''))
-        except ROSInterruptException:
-            self.nav_server.set_aborted(NavigateResult(message=''))
 
     def navigate_traj_cb(self, goal):
         try:

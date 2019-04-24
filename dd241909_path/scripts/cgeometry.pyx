@@ -24,7 +24,7 @@ cpdef bint isclose(a, b, rel_tol=1e-9, abs_tol=1e-9):
              (diff <= abs(rel_tol * a))) or
              (diff <= abs_tol))
 
-Waypoint = namedtuple('Waypoint', ('x', 'y', 'z', 'vx', 'vy', 'vz', 'yaw'))
+Waypoint = namedtuple('Waypoint', ('id', 'x', 'y', 'z', 'vx', 'vy', 'vz', 'yaw'))
 
 cdef class Line:
     cdef Vec3 p1, p2
