@@ -266,7 +266,7 @@ class TrajectoryFollower(object):
 
                 rospy.loginfo_throttle(5, rospy.get_name() + ': Rotating...')
 
-                msg.yaw = (msg.yaw + 0.5) % 360.0
+                msg.yaw = (msg.yaw + 1) % 360.0
                 msg.header.stamp = rospy.Time.now()
                 self.cmdpos_pub.publish(msg)
                 self.cmd_rate.sleep()

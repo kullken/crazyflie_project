@@ -9,5 +9,5 @@ max_step_time: 10
 waypoint_position_tolerance: 0.05
 waypoint_velocity_tolerance: 0.1
 waypoint_pre_gate_distance: 0.3
-waypoint_post_gate_distance: 0.1
-waypoint_gate_velocity: 0.15
+waypoint_post_gate_distance: 0.2
+waypoint_gate_velocity: 0.25

@@ -30,7 +30,7 @@ def create_map(map_data, type='grid'):
     off_ground  = rospy.get_param(rospy.get_namespace() + 'map/gate_off_ground')
     side_margin = rospy.get_param(rospy.get_namespace() + 'map/gate_side_margin')
 
-    z_min = 0.0
+    z_min = 0.2
     z_max = 1.0
     # airspace_min = Vec3(*map_data['airspace']['min'])
     airspace_min = Vec3(map_data['airspace']['min'][0], map_data['airspace']['min'][1], z_min)

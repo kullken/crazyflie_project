@@ -72,6 +72,7 @@ class GlobalPlanner(object):
         self.wp_pre_gate_dist   = rospy.get_param(rospy.get_namespace() + 'rrt/waypoint_pre_gate_distance')
         self.wp_post_gate_dist  = rospy.get_param(rospy.get_namespace() + 'rrt/waypoint_post_gate_distance')
         self.wp_gate_vel        = rospy.get_param(rospy.get_namespace() + 'rrt/waypoint_gate_velocity')
+        self.yawrate_max        = rospy.get_param(rospy.get_namespace() + 'crazyflie/yawrate_max')
 
         # Publishers
         self.traj_pub = rospy.Publisher(trajectory_topic, Trajectory, queue_size=1)
@@ -121,7 +122,7 @@ class GlobalPlanner(object):
         # Run path planning
         planner = RRT(self.map)
         traj = planner.plan_traj(start_wp, waypoints)
-        while traj is None:
+        while traj is None and not rospy.is_shutdown():
             rospy.logwarn('RRT: Restarting RRT...')
             traj = planner.plan_traj(start_wp, waypoints)
 
@@ -141,61 +142,10 @@ class GlobalPlanner(object):
         traj_msg.header.stamp = rospy.Time.now()
         traj_msg.pieces = traj_pieces
 
-        # Add yaw trajectory based on gates
-        prev_yaw = (start_wp.yaw *180/math.pi) % 360
-        i = 0
-        for gate in self.map.gates:
-            wp1, wp2 = self.gate_to_waypoints(gate)
-
-            # Loop until pre-gate waypoint
-            pre_gate_pieces = []
-            duration = 0
-            while True:
-                bezier = traj[i]
-                piece = traj_msg.pieces[i]
-                pre_gate_pieces.append(piece)
-                duration += piece.duration.to_sec()
-                i += 1
+        # Set yaw values of traj_msg inplace
+        self.set_yaw_gates(traj_msg, start_wp, traj)
+        # self.set_yaw_rotating(traj_msg, start_wp, waypoints[-1])
                 
-                wp_pos = Vec3(wp1.x, wp1.y, wp1.z)
-                bz_pos = bezier.pos(-1)
-                if wp_pos == bz_pos:
-                    break
-            
-            # Calculate yawrate
-            gate_yaw = gate['heading'] % 360
-            if abs(gate_yaw - prev_yaw) <= 180:
-                yawrate = (gate_yaw - prev_yaw) / duration
-            else:
-                yawrate = (360 + gate_yaw - prev_yaw) / duration
-
-            # Turn yaw and yawrate into coefficients
-            t = 0
-            for piece in pre_gate_pieces:
-                piece.poly_yaw[0] = prev_yaw + t*yawrate
-                piece.poly_yaw[1] = yawrate
-                t += piece.duration.to_sec()
-
-            # Loop until post-gate waypoint
-            t = 0
-            while True:
-                bezier = traj[i]
-                piece = traj_msg.pieces[i]
-                piece.poly_yaw[0] = gate_yaw
-                t += piece.duration.to_sec()
-                i += 1
-                
-                wp_pos = Vec3(wp2.x, wp2.y, wp2.z)
-                bz_pos = bezier.pos(-1)
-                if wp_pos == bz_pos:
-                    break
-
-            prev_yaw = gate_yaw
-
-        # Set yaw values for after the last gate using escaped loop variables
-        for piece in traj_msg.pieces[i-1:]:
-            piece.poly_yaw[0] = gate_yaw
-
         # Publish trajectory
         self.traj_pub.publish(traj_msg)
 
@@ -289,6 +239,73 @@ class GlobalPlanner(object):
          pose2.pose.orientation.w) = quaternion_from_euler(0.0, 0.0, theta)
 
         return [pose1, pose2]
+
+
+    def set_yaw_gates(self, traj_msg, start_wp, traj):
+        # Add yaw trajectory based on gates
+        prev_yaw = (start_wp.yaw *180/math.pi) % 360
+        i = 0
+        # for gate in self.map.gates[]:
+        for gate in self.map.gates[:-1]:
+            wp1, wp2 = self.gate_to_waypoints(gate)
+
+            # Loop until pre-gate waypoint
+            pre_gate_pieces = []
+            duration = 0
+            while True:
+                bezier = traj[i]
+                piece = traj_msg.pieces[i]
+                pre_gate_pieces.append(piece)
+                duration += piece.duration.to_sec()
+                i += 1
+                
+                wp_pos = Vec3(wp1.x, wp1.y, wp1.z)
+                bz_pos = bezier.pos(-1)
+                if wp_pos == bz_pos:
+                    break
+            
+            # Calculate yawrate
+            gate_yaw = gate['heading']
+            if abs(gate_yaw - prev_yaw) <= 180:
+                yawrate = (gate_yaw - prev_yaw) / duration
+            else:
+                yawrate = (360 + gate_yaw - prev_yaw) / duration
+
+            # Turn yaw and yawrate into coefficients
+            t = 0
+            for piece in pre_gate_pieces:
+                piece.poly_yaw[0] = prev_yaw + t*yawrate
+                piece.poly_yaw[1] = yawrate
+                t += piece.duration.to_sec()
+
+            # Loop until post-gate waypoint
+            t = 0
+            while True:
+                bezier = traj[i]
+                piece = traj_msg.pieces[i]
+                piece.poly_yaw[0] = gate_yaw
+                t += piece.duration.to_sec()
+                i += 1
+                
+                wp_pos = Vec3(wp2.x, wp2.y, wp2.z)
+                bz_pos = bezier.pos(-1)
+                if wp_pos == bz_pos:
+                    break
+
+            prev_yaw = gate_yaw
+
+        # Set yaw values for after the last gate using escaped loop variables
+        for piece in traj_msg.pieces[i-1:]:
+            piece.poly_yaw[0] = gate_yaw
+        
+    def set_yaw_rotating(self, traj_msg, start_wp, final_wp):
+        prev_yaw = start_wp.yaw * 180/math.pi
+        yawrate = 45.0
+        for piece in traj_msg.pieces:
+            piece.poly_yaw[0] = prev_yaw
+            piece.poly_yaw[1] = yawrate
+            duration = piece.duration.to_sec()
+            prev_yaw = (prev_yaw + duration*yawrate) % 360
 
 
 def publish_traj_to_rviz(traj_msg):

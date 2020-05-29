@@ -1,3 +1,4 @@
 collision_radius: 0.12
-vel_max: 0.25
+vel_max: 0.3
 acc_max: 0.5
+yawrate_max: 90

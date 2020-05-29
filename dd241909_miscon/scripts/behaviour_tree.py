@@ -173,6 +173,7 @@ def tree_shutdown(tree):
 
 if __name__ == '__main__':
     rospy.init_node('behaviour_tree')
+    rospy.loginfo(rospy.get_name() + ': Initialising node...')
 
     # Access ros parameters
     trajectory_topic    = rospy.get_param('~trajectory_topic')
